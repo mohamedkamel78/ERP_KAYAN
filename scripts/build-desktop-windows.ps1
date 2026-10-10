@@ -107,6 +107,16 @@ Copy-Item (Join-Path $backendSource ".env.production.example") $backendFolder
 # its own settings, with fresh secrets, into the machine's application-data
 # folder on first run. See docs/DESKTOP_WINDOWS.md.
 
+# Source maps belong to a debugging session on the build machine, not to a
+# customer's installation: they point at source files that do not travel, and
+# they make the package bigger for nothing anyone can use. The compiled server
+# runs exactly the same without them.
+$maps = @(Get-ChildItem (Join-Path $backendFolder "dist") -Recurse -Filter "*.map" -ErrorAction SilentlyContinue)
+if ($maps.Count -gt 0) {
+  $maps | Remove-Item -Force
+  Write-Host "      left $($maps.Count) source map(s) out of the package"
+}
+
 # ------------------------------------------------- 3. production libraries
 Step "3/7" "Installing the server's libraries (production only)"
 Push-Location $backendFolder
