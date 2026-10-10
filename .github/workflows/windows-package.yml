@@ -74,6 +74,18 @@ jobs:
           if (Test-Path $iscc) { Write-Host "Inno Setup: $iscc" }
           else { Write-Host "Inno Setup: not found - the installer step will be skipped" }
 
+      - name: Check that the two backend implementations still agree
+        shell: pwsh
+        run: |
+          # A second, before the long build: the desktop and the web
+          # implementation of the backend layer must offer the same shape, and
+          # analysis on a workstation only ever sees one of them.
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          cmd /c 'dart run tools\backend_shape_check.dart > build\shape-log.txt 2>&1'
+          $code = $LASTEXITCODE
+          Get-Content build\shape-log.txt
+          if ($code -ne 0) { throw "the two backend implementations do not agree (exit code $code)" }
+
       - name: Build the program folder, the zip and the installer
         shell: pwsh
         run: |
@@ -109,8 +121,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          $logs = @("build\build-log.txt", "build\verify-log.txt", "build\doctor.txt")
-          $tails = @{ "build\build-log.txt" = 300; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
+          $logs = @("build\shape-log.txt", "build\build-log.txt", "build\verify-log.txt", "build\doctor.txt")
+          $tails = @{ "build\shape-log.txt" = 60; "build\build-log.txt" = 300; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
           $parts = @()
           foreach ($log in $logs) {
             if (Test-Path $log) {

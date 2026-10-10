@@ -17,6 +17,23 @@ import 'dart:math';
 
 /// What the shell needs to know after a start attempt.
 class LocalBackendStatus {
+  /// This copy of the program does not own a server, so there is nothing to
+  /// start and nothing to wait for: a debug run on a desktop, where the
+  /// developer starts the API themselves and the program talks to it exactly as
+  /// it always has. The gate reads this as "carry on" and shows the normal
+  /// screens.
+  ///
+  /// It has to exist here as well as in the web stub, because the gate is
+  /// compiled against this file on every desktop build - and `flutter analyze`
+  /// resolves the conditional export to the stub, so it never checks that
+  /// pairing. tools/backend_shape_check.dart does.
+  const LocalBackendStatus.unsupported()
+      : baseUrl = null,
+        problem = null,
+        logPath = null,
+        databaseProblem = false,
+        needsFirstAdministrator = false;
+
   const LocalBackendStatus.ready(this.baseUrl)
       : problem = null,
         logPath = null,
