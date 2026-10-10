@@ -112,6 +112,13 @@ jobs:
           & ./scripts/verify-package.ps1 *> build\verify-log.txt
           $code = $LASTEXITCODE
           Get-Content build\verify-log.txt
+          $summary = Get-Content build\verify-log.txt |
+            Select-String -Pattern "passed \d+, failed \d+" | Select-Object -First 1
+          if ($summary) {
+            # An annotation is the one part of a run a public repository shows
+            # without signing in, so the verdict travels with the commit.
+            Write-Host "::notice::package check: $($summary.Matches[0].Value)"
+          }
           if ($code -ne 0) { throw "the package did not pass its checks (exit code $code)" }
 
       # A failed run on a public repository keeps its log behind a sign-in, so
@@ -168,6 +175,15 @@ jobs:
           $files = @(Get-ChildItem build\desktop -File | Where-Object { $_.Extension -in '.zip','.exe' } | ForEach-Object { $_.FullName })
           if ($files.Count -eq 0) { throw "nothing to publish" }
 
+          # Say what was actually checked, in the release itself, so the files
+          # carry their own evidence instead of asking anyone to trust them.
+          $verdict = (Get-Content build\verify-log.txt |
+            Select-String -Pattern "passed \d+, failed \d+" | Select-Object -First 1).Matches[0].Value
+          $totalSize = (Get-Content build\build-log.txt |
+            Select-String -Pattern "Total size\s*:\s*(.+)$" | Select-Object -First 1).Matches[0].Groups[1].Value.Trim()
+          $builtOn = (Get-Content build\doctor.txt |
+            Select-String -Pattern "Flutter \(Channel stable, ([^,]+)" | Select-Object -First 1).Matches[0].Groups[1].Value
+
           $notes = @"
           KAYAN ERP for Windows, built from commit ${{ github.sha }}.
 
@@ -183,6 +199,15 @@ jobs:
           On a machine where the database is still empty the program asks for the
           first administrator, and creates the company, its roles and its chart
           of accounts around that person.
+
+          What this build is
+          ------------------
+          Flutter $builtOn, on Windows, in release mode. The server inside it is
+          the compiled NestJS build with production libraries only, running on
+          the Node runtime that ships in the folder. Unpacked size: $totalSize.
+
+          scripts\verify-package.ps1 checked the folder before it was published:
+          $verdict.
           "@
 
           if (gh release view $tag 2>$null) {
