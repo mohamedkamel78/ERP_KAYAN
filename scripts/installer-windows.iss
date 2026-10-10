@@ -56,7 +56,14 @@ PrivilegesRequired=admin
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+; Arabic ships as an *unofficial* Inno Setup translation, so a standard
+; installation does not have it. Asking for a file that is not there makes
+; ISCC fail outright, which would take the whole installer down with it: the
+; language is offered when this machine has it, and the installer is still
+; perfectly usable in English when it does not.
+#if FileExists(AddBackslash(CompilerPath) + "Languages\Arabic.isl")
 Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
+#endif
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce

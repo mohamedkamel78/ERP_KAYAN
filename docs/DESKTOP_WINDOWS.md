@@ -161,13 +161,56 @@ database». فبدل ما نحقن كلمة سر معروفة في نسخة ال
 
 ## 6. البناء والفحص
 
-على جهاز ويندوز فيه Flutter و Node:
+### 6.1 البناء على جهاز ويندوز
+
+على جهاز ويندوز فيه Flutter و Node (ومثبّت Inno Setup 6 لو عايز ملف التنصيب):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1
 ```
 
-الناتج: `build\desktop\KAYAN-ERP\` و `build\desktop\KAYAN-ERP-windows.zip`.
+الناتج: `build\desktop\KAYAN-ERP\` و `build\desktop\KAYAN-ERP-windows.zip`،
+و`build\desktop\KAYAN-ERP-Setup-1.0.0.exe` لو Inno Setup متثبت.
+
+### 6.2 البناء من غير جهاز ويندوز (GitHub Actions)
+
+`flutter build windows` محتاج ويندوز وأدوات Visual Studio، فمش ممكن على لينكس أو
+ماك. عشان كده فيه خط بناء جاهز في المستودع:
+`.github/workflows/windows-package.yml` — بيشتغل على جهاز ويندوز حقيقي
+(`windows-latest`) بنفس السكربت بالظبط.
+
+- **أي push على `main`** بيغيّر في `backend/` أو `lib/` أو `windows/` أو
+  `scripts/` → الخط يبني ويفحص، والنواتج تتحفظ في تبويب **Actions** بتاع
+  المستودع (Artifacts).
+- **وسم إصدار** (tag) زي `v1.0.0` → نفس البناء، والنواتج تتنشر كـ**Release**
+  ينزل منه أي حد من غير تسجيل دخول:
+  `https://github.com/mohamedkamel78/ERP_KAYAN/releases`
+
+إزاي تعمل إصدار جديد:
+
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+(غيّر `AppVersion` في `scripts\installer-windows.iss` الأول لو عايز رقم الإصدار
+في اسم ملف التنصيب يتغيّر معاه.)
+
+### 6.3 فحص نسخة مبنية قبل ما توصل للعميل
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1
+```
+
+مدقّق النسخة بيفحص المجلد نفسه — **من غير قاعدة بيانات ومن غير تشغيل** — ويجاوب
+على الأسئلة اللي تحدد إذا كانت النسخة صالحة للتوزيع: كل الملفات موجودة؟ المحرّك
+المرفق بيشتغل من مكانه؟ نقطة دخول السيرفر بتتحمل؟ فيه `.env` تطوير أو إعدادات أو
+مستودع Git أو مسارات من جهاز اللي بنى النسخة؟ بيخرج بكود 1 لو فيه أي فشل، فممكن
+يشتغل كخطوة في أي خط بناء.
+
+اللي **مايقدرش** يفحصه (لأنه محتاج شاشة وقاعدة بيانات): سلوك البرنامج نفسه — إن
+النافذة تفتح والسيرفر يشتغل والمستخدم يدخل. دول مغطّيين بـ`tools\desktop_check.dart`
+و`tools\desktop_package_check.sh`.
 
 **Verification — ما تم التحقق منه فعليًا، وما لم يتم:**
 

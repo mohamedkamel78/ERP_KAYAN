@@ -224,10 +224,14 @@ Step "7/7" "Making the installer a customer can run"
 $installer = $null
 $iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
 if (-not $iscc) {
+  # ${env:ProgramFiles(x86)} needs the braces: without them PowerShell expands
+  # $env:ProgramFiles and leaves "(x86)" as literal text, which builds a path
+  # that never exists - and the installer would silently never be made.
   foreach ($probe in @(
-      "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe",
-      "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) {
-    if (Test-Path $probe) { $iscc = @{ Source = $probe }; break }
+      "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+      "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+      "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe")) {
+    if ($probe -and (Test-Path $probe)) { $iscc = @{ Source = $probe }; break }
   }
 }
 if ($iscc) {

@@ -1,0 +1,135 @@
+# Builds the real Windows copy of KAYAN ERP, on a real Windows machine.
+#
+# Why this exists: `flutter build windows` needs Windows and Visual Studio, so
+# the program cannot be built on a Linux or macOS workstation. This workflow is
+# the build machine. It runs the very same script a developer would run
+# (scripts\build-desktop-windows.ps1), then asks whether the result is really
+# shippable (scripts\verify-package.ps1), and keeps the output.
+#
+# What it produces:
+#   * on every relevant push to main  -> the outputs are kept as build artifacts
+#     (Actions tab of the run)
+#   * on a version tag such as v1.0.0 -> the same files are published as a
+#     GitHub release, which anyone can download without signing in:
+#         KAYAN-ERP-windows.zip          the program folder, ready to copy
+#         KAYAN-ERP-Setup-<version>.exe  the installer a customer double-clicks
+#
+# No database is involved: building the program does not need one. Running it
+# does, and that is documented in docs\DESKTOP_WINDOWS.md.
+
+name: Windows package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "lib/**"
+      - "windows/**"
+      - "scripts/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/windows-package.yml"
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and verify the Windows program
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Take the source
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          channel: stable
+          cache: true
+
+      - name: Install Node (for building only - it ships inside the package)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Show the build tools
+        shell: pwsh
+        run: |
+          flutter --version
+          node --version
+          npm --version
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) { Write-Host "Inno Setup: $iscc" }
+          else { Write-Host "Inno Setup: not found - the installer step will be skipped" }
+
+      - name: Build the program folder, the zip and the installer
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1
+          if ($LASTEXITCODE -ne 0) { throw "the build script failed" }
+
+      - name: Check that the result is really shippable
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1
+          if ($LASTEXITCODE -ne 0) { throw "the package did not pass its checks" }
+
+      - name: Show what was produced
+        shell: pwsh
+        run: |
+          Get-ChildItem build\desktop | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize
+          Get-ChildItem build\desktop\KAYAN-ERP | Select-Object Name | Format-Table -AutoSize
+
+      - name: Keep the outputs on this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAYAN-ERP-windows
+          path: |
+            build/desktop/*.zip
+            build/desktop/*Setup*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish them as a downloadable release (version tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $files = @(Get-ChildItem build\desktop -File | Where-Object { $_.Extension -in '.zip','.exe' } | ForEach-Object { $_.FullName })
+          if ($files.Count -eq 0) { throw "nothing to publish" }
+
+          $notes = @"
+          KAYAN ERP for Windows, built from commit ${{ github.sha }}.
+
+          Install it
+          ----------
+          Run KAYAN-ERP-Setup-$tag.exe, or unpack KAYAN-ERP-windows.zip anywhere
+          and double-click erp_kayan.exe inside it.
+
+          The program starts its own server: no terminal, no Node.js, no npm, no
+          Flutter and no commands. What the machine does need is PostgreSQL,
+          holding the company's data - see docs\DESKTOP_WINDOWS.md.
+
+          On a machine where the database is still empty the program asks for the
+          first administrator, and creates the company, its roles and its chart
+          of accounts around that person.
+          "@
+
+          if (gh release view $tag 2>$null) {
+            gh release delete $tag --yes --cleanup-tag
+          }
+          gh release create $tag --verify-tag --title "KAYAN ERP $tag - Windows" --notes $notes @files
