@@ -16,6 +16,14 @@ iOS, Windows, macOS, Linux and Web** from a single codebase.
 | `docs/DESKTOP_WINDOWS.md` | The Windows copy that starts its own server (Arabic) |
 | `scripts/build-desktop-windows.ps1` | Builds that copy: one folder that runs by itself |
 | `scripts/installer-windows.iss` | Turns that folder into one Setup .exe a customer runs (Inno Setup) |
+| `scripts/verify-package.ps1` | Asks whether a built copy is really shippable - no database needed |
+| `.github/workflows/windows-package.yml` | Builds it on a real Windows machine and publishes the result |
+| `tools/backend_shape_check.dart` | Proves the desktop and the web backend layer still agree |
+
+The built Windows copy is published as a release, so nobody has to build it to
+run it: <https://github.com/mohamedkamel78/ERP_KAYAN/releases>. The installer is
+`KAYAN-ERP-Setup-1.0.0.exe`; the machine it lands on needs PostgreSQL and
+nothing else. `docs/DESKTOP_WINDOWS.md` says what happens when it is opened.
 
 ## Status
 

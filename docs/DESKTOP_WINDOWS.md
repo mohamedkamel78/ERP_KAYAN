@@ -196,6 +196,29 @@ git push origin v1.0.1
 (غيّر `AppVersion` في `scripts\installer-windows.iss` الأول لو عايز رقم الإصدار
 في اسم ملف التنصيب يتغيّر معاه.)
 
+**الإصدار المبني فعلًا:** <https://github.com/mohamedkamel78/ERP_KAYAN/releases/tag/v1.0.0>
+فيه `KAYAN-ERP-Setup-1.0.0.exe` (96.0 ميجا) و`KAYAN-ERP-windows.zip` (173.8 ميجا)،
+ونصّ الإصدار بيقول إيه اللي اتفحص ونتيجته — يعني الملف بيوثّق نفسه.
+
+**اللي البناء الحقيقي كشفه** (وماكانش ممكن يظهر بأي فحص على لينكس):
+
+1. `backend_gate.dart` كان بينادي `LocalBackendStatus.unsupported()` — مُنشئ موجود
+   في نسخة الويب بس ومش موجود في نسخة سطح المكتب. `flutter analyze` مااشتكاوش
+   لأنه بيحلّ التصدير الشرطي لأول اسم (الـstub)، وبناء الويب عدى لنفس السبب.
+   **أي بناء لسطح المكتب كان هيفشل**، ومنه `flutter run -d windows` في التطوير.
+   اتصلّح، و`tools/backend_shape_check.dart` بقى بيمنع تكراره في ثانية واحدة.
+2. اكتشاف Inno Setup كان بيقرأ `"$env:ProgramFiles(x86)"` — وPowerShell بيوسّع ده
+   لـ`C:\Program Files` وبعدها النص الحرفي `(x86)`، يعني مسار مش موجود، فالمثبّت
+   ماكانش هيتبني أبدًا حتى على جهاز فيه Inno Setup.
+3. ملف المثبّت كان بيطلب `compiler:Languages\Arabic.isl`، والترجمة العربية مش
+   مرفقة مع Inno Setup الرسمي — وده بيوقف ISCC بالكامل. بقت تُعرض لما تكون موجودة.
+4. `tsconfig.json` بيطلّع source maps و declaration files، وكانت بتتسافر مع النسخة
+   وتشير لملفات مصدر مش موجودة فيها. بقت بتتساب على جهاز البناء.
+5. مدقّق النسخة نفسه كان بيخطئ مرتين: `typescript` و`@types/node` موجودين في شجر
+   الإنتاج فعلًا (Prisma بيطلب الأول كـpeer، و exceljs و @nestjs/jwt بيطلبوا التاني)،
+   و`ConvertFrom-Json` بيرفض `package-lock.json` لأن الحزمة الجذرية اسمها فاضي.
+   بقى يقرا القفل نفسه ويستنتج منه، بدل قائمة أسماء مكتوبة بالإيد.
+
 ### 6.3 فحص نسخة مبنية قبل ما توصل للعميل
 
 ```powershell
@@ -226,9 +249,13 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1
 | كود ويندوز `windows/runner/main.cpp` (الكونسول المخفي + job object) | ✅ تُرجم واتربط بمترجم ويندوز حقيقي (mingw-w64) بلا تحذيرات |
 | فحوص البرنامج الكاملة | ✅ acceptance 153/0 · features 134/0 · browser 23/0 |
 | مسار البناء المضمّن في عميل Prisma | ✅ معلومة: `prisma generate` بيكتب مسار مجلد التغليف جوّه `node_modules/.prisma/client/*.js`. البرنامج بيحلّ المسارات نسبيًا من مكانه وقت التشغيل، وده اتثبت عمليًا باختبار النسخة المنقولة (32/32) — يعني المسار ده نص تشخيصي مش اعتماد تشغيلي |
-| **بناء `erp_kayan.exe` نفسه** | ❌ يحتاج جهاز ويندوز — لا يمكن بناؤه في بيئة لينكس |
-| **تجميع المُثبِّت `KAYAN-ERP-Setup-1.0.0.exe`** | ❌ Inno Setup بيعمل على ويندوز فقط؛ ملف التعريف جاهز ومربوط بسكربت البناء |
-| النافذة المخفية و job object أثناء التشغيل الفعلي بويندوز | ❌ ملاحظة بشرية على ويندوز بعد البناء |
+| **بناء `erp_kayan.exe` على ويندوز حقيقي** | ✅ اتبني بـFlutter 3.47.6 (release) على Windows مع Visual Studio Enterprise 2026 عبر `.github/workflows/windows-package.yml`، والملف الناتج **PE32+ GUI x86-64** |
+| **تجميع المُثبِّت** | ✅ `KAYAN-ERP-Setup-1.0.0.exe` (96.0 ميجا) — Inno Setup 6.7.0، «Successful compile (128.797 sec)» |
+| **مدقّق النسخة** `scripts\verify-package.ps1` | ✅ **32/0** على النسخة المبنية فعلًا، مش على مجلد مُحاكى |
+| **محتوى النسخة المنشورة** | ✅ 15 205 ملفًا / 502.4 ميجا غير مضغوطة، الـzip 173.8 ميجا: `erp_kayan.exe` + `flutter_windows.dll` + `data\` + `backend\dist\src\main.js` + `backend\node\node.exe` (**v24.21.0**) + `query_engine-windows.dll.node` + `README.txt` |
+| **نضافة النسخة** | ✅ مفيش `backend\.env`، مفيش `prisma\seed.ts`، مفيش source maps، مفيش `.d.ts`، مفيش `.git`، مفيش `kayan.env`، مفيش jest أو @nestjs/cli أو ts-node، ولا أي مسار من جهاز المطوّر أو جهاز البناء في ملفات البرنامج |
+| **كود `windows/runner/main.cpp` جوه الـ`.exe`** | ✅ جدول الاستيراد فيه `AllocConsole` و`AttachConsole` و`GetConsoleWindow` و`ShowWindow` و`CreateJobObjectW` و`SetInformationJobObject` و`AssignProcessToJobObject` — يعني الكونسول المخفي و job object اترجموا بـMSVC ودخلوا النسخة الموزّعة فعلًا |
+| **تشغيل النافذة نفسها على ويندوز** | ❌ لسه محتاج جهاز ويندوز بشاشة وقاعدة بيانات: إن النافذة تفتح، والكونسول يفضل مخفي، و job object يقفل السيرفر، وشاشة «أول تشغيل» تظهر. الكود مبني ومتحقق، بس الملاحظة الأخيرة بشرية |
 
 ---
 
@@ -250,6 +277,8 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1
   (`lib/core/backend/local_backend*.dart` بنفس أسلوب
   `lib/core/platform/browser_actions.dart`)، وما ينقص هو بناء
   `flutter build macos/linux` وسكربتات تغليف مثل سكربت ويندوز.
-- توقيع الكود (code signing): النسخة غير موقّعة، فويندوز قد يعرض تحذير SmartScreen.
-- المُثبّت: ملف التعريف `scripts/installer-windows.iss` جاهز ومربوط بسكربت البناء (الخطوة 7/7)، لكن تجميعه نفسه بيتم على ويندوز بـ Inno Setup 6، فالناتج المجرب هنا هو المجلد والـzip. مفيش `.msi`.
+- توقيع الكود (code signing): النسخة غير موقّعة، فويندوز قد يعرض تحذير
+  SmartScreen عند أول تشغيل («More info» ← «Run anyway»). الشهادة حاجة تُشترى
+  وتُربط بخط البناء، وشغلها منفصل عن اللي هنا.
+- المُثبّت اتجمّع فعلًا (`KAYAN-ERP-Setup-1.0.0.exe`، Inno Setup 6.7.0)، لكن **عملية التنصيب نفسها ماتجرّبتش على جهاز ويندوز**: إن المثبّت يعمل مجلد في `Program Files`، ويحط اختصار قائمة ابدأ، ويشغّل البرنامج بعد التنصيب، وإن إلغاء التنصيب يسيب بيانات الشركة في `%APPDATA%`. مفيش `.msi`.
 - لو حد شغّل برنامج على جهاز مش عليه PostgreSQL: لا توجد قاعدة مرفقة (قرار أ).

@@ -183,14 +183,22 @@ jobs:
             Select-String -Pattern "Total size\s*:\s*(.+)$" | Select-Object -First 1).Matches[0].Groups[1].Value.Trim()
           $builtOn = (Get-Content build\doctor.txt |
             Select-String -Pattern "Flutter \(Channel stable, ([^,]+)" | Select-Object -First 1).Matches[0].Groups[1].Value
+          # Names come from the files themselves: a tag says v1.0.1 while the
+          # installer inside it is named for the version in its own definition.
+          $setupName = ($files | Where-Object { $_ -match "Setup" } |
+            ForEach-Object { Split-Path $_ -Leaf } | Select-Object -First 1)
+          if (-not $setupName) { $setupName = "the installer in this release" }
+          $zipName = ($files | Where-Object { $_ -match "\.zip$" } |
+            ForEach-Object { Split-Path $_ -Leaf } | Select-Object -First 1)
+          if (-not $zipName) { $zipName = "the .zip in this release" }
 
           $notes = @"
           KAYAN ERP for Windows, built from commit ${{ github.sha }}.
 
           Install it
           ----------
-          Run KAYAN-ERP-Setup-$tag.exe, or unpack KAYAN-ERP-windows.zip anywhere
-          and double-click erp_kayan.exe inside it.
+          Run $setupName, or unpack $zipName anywhere and double-click
+          erp_kayan.exe inside it.
 
           The program starts its own server: no terminal, no Node.js, no npm, no
           Flutter and no commands. What the machine does need is PostgreSQL,
