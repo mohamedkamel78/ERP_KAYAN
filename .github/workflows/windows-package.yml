@@ -77,14 +77,43 @@ jobs:
       - name: Build the program folder, the zip and the installer
         shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1
-          if ($LASTEXITCODE -ne 0) { throw "the build script failed" }
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1 *>&1 |
+            Tee-Object -FilePath build\build-log.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "the build script failed with exit code $code" }
 
       - name: Check that the result is really shippable
         shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1
-          if ($LASTEXITCODE -ne 0) { throw "the package did not pass its checks" }
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1 *>&1 |
+            Tee-Object -FilePath build\verify-log.txt
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { throw "the package did not pass its checks (exit code $code)" }
+
+      # A failed run on a public repository keeps its log behind a sign-in, so
+      # the useful part of it is left somewhere anyone can read: a comment on
+      # the commit that was being built. It is the last 150 lines of whichever
+      # step broke.
+      - name: If it broke, leave the log on the commit
+        if: failure()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $logs = @("build\build-log.txt", "build\verify-log.txt")
+          $parts = @()
+          foreach ($log in $logs) {
+            if (Test-Path $log) {
+              $parts += "### $log`n`n``````text`n" + ((Get-Content $log -Tail 150) -join "`n") + "`n``````"
+            }
+          }
+          if ($parts.Count -eq 0) { $parts = @("(no build log was written - the step broke before it started)") }
+          $body = "The Windows build of commit ${{ github.sha }} did not finish.`n`n" + ($parts -join "`n`n")
+          Set-Content -Path build\comment.md -Value $body -Encoding utf8
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -F body=@build\comment.md
 
       - name: Show what was produced
         shell: pwsh
