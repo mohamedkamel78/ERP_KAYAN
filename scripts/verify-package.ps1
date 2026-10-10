@@ -106,8 +106,25 @@ if (Has "backend\scripts\prepare-database.mjs") {
 }
 Check "its libraries are there (backend\node_modules)" (Has "backend\node_modules")
 Check "Prisma's client was generated for this platform" (Has "backend\node_modules\.prisma\client")
-Check "the production libraries only: no typescript compiler" (-not (Has "backend\node_modules\typescript"))
-Check "the production libraries only: no test runner" (-not (Has "backend\node_modules\jest"))
+
+# The development toolchain has no business travelling with a customer's copy.
+# typescript is the one exception and it is not a mistake: Prisma declares it
+# as a peer dependency, and npm installs peer dependencies on its own, so a
+# production install brings it along. Nothing reads it at run time.
+foreach ($tool in @(
+    "@nestjs\cli", "@nestjs\schematics", "@types\express", "@types\jest",
+    "@types\node", "jest", "ts-jest", "ts-node", "eslint", "prettier")) {
+  Check "no development tool shipped: $tool" (-not (Has "backend\node_modules\$tool"))
+}
+if (Has "backend\node_modules\typescript") {
+  Write-Host ""
+  Write-Host "  note  typescript travels with the libraries: Prisma declares it as a" -ForegroundColor Yellow
+  Write-Host "        peer dependency and npm installs those by itself. The program never" -ForegroundColor Yellow
+  Write-Host "        runs it; the compiled server needs no compiler." -ForegroundColor Yellow
+}
+
+Check "no TypeScript source of the server travels" `
+  (-not (Has "backend\prisma\seed.ts"))
 Check "a note for whoever opens the folder" (Has "README.txt")
 
 # --------------------------------------------------------- 3. bundled Node

@@ -117,6 +117,21 @@ if ($maps.Count -gt 0) {
   Write-Host "      left $($maps.Count) source map(s) out of the package"
 }
 
+# Declaration files are read by a compiler, and prisma\seed.ts is read by a
+# developer's ts-node. The packaged server needs neither: what runs on a fresh
+# machine is dist\prisma\seed.js, the compiled form of that same file, called
+# by scripts\prepare-database.mjs.
+$declarations = @(Get-ChildItem (Join-Path $backendFolder "dist") -Recurse -Filter "*.d.ts" -ErrorAction SilentlyContinue)
+if ($declarations.Count -gt 0) {
+  $declarations | Remove-Item -Force
+  Write-Host "      left $($declarations.Count) declaration file(s) out of the package"
+}
+$seedSource = Join-Path $backendFolder "prisma\seed.ts"
+if (Test-Path $seedSource) {
+  Remove-Item -Force $seedSource
+  Write-Host "      left the server's TypeScript source out of the package"
+}
+
 # ------------------------------------------------- 3. production libraries
 Step "3/7" "Installing the server's libraries (production only)"
 Push-Location $backendFolder
