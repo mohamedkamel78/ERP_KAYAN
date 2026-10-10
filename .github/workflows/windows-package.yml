@@ -210,7 +210,18 @@ jobs:
           $verdict.
           "@
 
-          if (gh release view $tag 2>$null) {
-            gh release delete $tag --yes --cleanup-tag
+          # A tag is not the same thing as a release: deleting the release must
+          # leave the tag alone, or the create that follows has nothing to
+          # verify against. (--cleanup-tag deletes both, and the first run that
+          # replaced an existing release failed exactly there.)
+          gh release view $tag > $null 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag --yes
           }
           gh release create $tag --verify-tag --title "KAYAN ERP $tag - Windows" --notes $notes @files
+          if ($LASTEXITCODE -ne 0) {
+            # Whatever stopped the create, the files are the point: try simply
+            # putting them on the release of that name.
+            gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "could not publish the package" }
+          }
