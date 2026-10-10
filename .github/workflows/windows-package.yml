@@ -78,18 +78,24 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1 *>&1 |
-            Tee-Object -FilePath build\build-log.txt
+          # Everything the build prints, including what it writes to stderr, goes
+          # into a file through cmd's own redirection. Merging the streams
+          # inside PowerShell instead turns the first line a tool writes to
+          # stderr into an error record, and the real message is lost.
+          flutter doctor -v > build\doctor.txt 2>&1
+          cmd /c 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1 > build\build-log.txt 2>&1'
           $code = $LASTEXITCODE
+          Write-Host "--- the end of the build log ---"
+          Get-Content build\build-log.txt -Tail 60
+          Write-Host "--- the build script exited with $code ---"
           if ($code -ne 0) { throw "the build script failed with exit code $code" }
 
       - name: Check that the result is really shippable
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path build | Out-Null
-          powershell -ExecutionPolicy Bypass -File scripts\verify-package.ps1 *>&1 |
-            Tee-Object -FilePath build\verify-log.txt
+          cmd /c 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-package.ps1 > build\verify-log.txt 2>&1'
           $code = $LASTEXITCODE
+          Get-Content build\verify-log.txt
           if ($code -ne 0) { throw "the package did not pass its checks (exit code $code)" }
 
       # A failed run on a public repository keeps its log behind a sign-in, so
@@ -103,11 +109,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          $logs = @("build\build-log.txt", "build\verify-log.txt")
+          $logs = @("build\build-log.txt", "build\verify-log.txt", "build\doctor.txt")
+          $tails = @{ "build\build-log.txt" = 300; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
           $parts = @()
           foreach ($log in $logs) {
             if (Test-Path $log) {
-              $parts += "### $log`n`n``````text`n" + ((Get-Content $log -Tail 150) -join "`n") + "`n``````"
+              $lines = Get-Content $log -Tail $tails[$log]
+              # npm prints a deprecation warning per package; they bury the one
+              # line that says what actually broke.
+              $lines = $lines | Where-Object { $_ -notmatch "^npm warn deprecated" }
+              $parts += "### $log`n`n``````text`n" + ($lines -join "`n") + "`n``````"
             }
           }
           if ($parts.Count -eq 0) { $parts = @("(no build log was written - the step broke before it started)") }
