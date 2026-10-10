@@ -105,7 +105,11 @@ jobs:
       - name: Check that the result is really shippable
         shell: pwsh
         run: |
-          cmd /c 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-package.ps1 > build\verify-log.txt 2>&1'
+          # Run in this shell rather than a nested Windows PowerShell: the check
+          # reads package-lock.json, and the two versions read a file whose root
+          # entry is named "" in different ways. It supports both, but the one
+          # that runs here is the one that gets tested.
+          & ./scripts/verify-package.ps1 *> build\verify-log.txt
           $code = $LASTEXITCODE
           Get-Content build\verify-log.txt
           if ($code -ne 0) { throw "the package did not pass its checks (exit code $code)" }

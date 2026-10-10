@@ -108,19 +108,57 @@ Check "its libraries are there (backend\node_modules)" (Has "backend\node_module
 Check "Prisma's client was generated for this platform" (Has "backend\node_modules\.prisma\client")
 
 # The development toolchain has no business travelling with a customer's copy.
-# typescript is the one exception and it is not a mistake: Prisma declares it
-# as a peer dependency, and npm installs peer dependencies on its own, so a
-# production install brings it along. Nothing reads it at run time.
-foreach ($tool in @(
-    "@nestjs\cli", "@nestjs\schematics", "@types\express", "@types\jest",
-    "@types\node", "jest", "ts-jest", "ts-node", "eslint", "prettier")) {
+# Which packages those are is not worth guessing: the lockfile that ships
+# inside the package already marks every development-only entry with
+# "dev": true, so the check reads that and asks whether any of them is
+# installed. Two things do travel and are not mistakes, because production
+# packages ask for them and npm answers:
+#   * typescript   - a peer dependency of prisma and @prisma/client
+#   * @types/node  - a dependency of @fast-csv (through exceljs) and of
+#                    @types/jsonwebtoken (through @nestjs/jwt)
+# Neither is read at run time; the compiled server needs no compiler.
+foreach ($tool in @("@nestjs\cli", "jest", "ts-node")) {
   Check "no development tool shipped: $tool" (-not (Has "backend\node_modules\$tool"))
 }
+
+$lockPath = Join-Path $folder "backend\package-lock.json"
+if (Test-Path $lockPath) {
+  # package-lock.json has an entry whose name is the empty string - the root
+  # package - and ConvertFrom-Json refuses to build a property with that name.
+  # Reading it as a table works, and on Windows PowerShell 5.1, which has no
+  # such switch, the old serializer does the same job.
+  $raw = Get-Content $lockPath -Raw
+  $lock = $null
+  if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $lock = ConvertFrom-Json $raw -AsHashtable
+  } else {
+    Add-Type -AssemblyName System.Web.Extensions
+    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength = [int]::MaxValue
+    $serializer.RecursionLimit = 2000
+    $lock = $serializer.DeserializeObject($raw)
+  }
+
+  $packages = $lock["packages"]
+  $devOnly = @()
+  foreach ($name in $packages.Keys) {
+    $entry = $packages[$name]
+    if ($name -and $entry.ContainsKey("dev") -and $entry["dev"] -eq $true) { $devOnly += $name }
+  }
+
+  $installed = @($devOnly | Where-Object { Test-Path (Join-Path $folder "backend\$_") })
+  Check "nothing the lockfile calls development-only is installed ($($devOnly.Count) such packages)" `
+    ($installed.Count -eq 0) ($installed -join ", ")
+} else {
+  Check "the lockfile travels with the server" $false
+}
+
 if (Has "backend\node_modules\typescript") {
   Write-Host ""
-  Write-Host "  note  typescript travels with the libraries: Prisma declares it as a" -ForegroundColor Yellow
-  Write-Host "        peer dependency and npm installs those by itself. The program never" -ForegroundColor Yellow
-  Write-Host "        runs it; the compiled server needs no compiler." -ForegroundColor Yellow
+  Write-Host "  note  typescript and @types/node travel with the libraries: production" -ForegroundColor Yellow
+  Write-Host "        packages declare them (Prisma as a peer, exceljs and @nestjs/jwt" -ForegroundColor Yellow
+  Write-Host "        through their own dependencies) and npm installs those by itself." -ForegroundColor Yellow
+  Write-Host "        The program never runs either; the compiled server needs no compiler." -ForegroundColor Yellow
 }
 
 Check "no TypeScript source of the server travels" `
