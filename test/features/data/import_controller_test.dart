@@ -94,6 +94,13 @@ void main() {
       expect(container.read(importControllerProvider).readyToCommit, isFalse);
     });
 
+    test('changing the mode throws the old dry run away', () {
+      final controller = container.read(importControllerProvider.notifier);
+      controller.succeeded(report(dryRun: true, created: 2));
+      controller.chooseMode(ImportMode.update);
+      expect(container.read(importControllerProvider).readyToCommit, isFalse);
+    });
+
     test('cancelling the file dialogue is not an error', () {
       final controller = container.read(importControllerProvider.notifier);
       controller.chooseFile(file('customers.xlsx'));
