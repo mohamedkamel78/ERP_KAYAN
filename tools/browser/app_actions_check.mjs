@@ -152,12 +152,8 @@ async function main() {
   await shot('01-login');
 
   const signedIn = await (async () => {
-    // The two fields accept typed text once focused; focus them by their
-    // labels where possible and by the centre of the card otherwise.
-    const userAt = (await findButton(USERNAME)) || null;
-    void userAt;
     // The login fields are text boxes, not buttons; click by geometry of the
-    // focused card (centre column) and type.
+    // centred card (centre column) and type.
     const box = await page.evaluate(() => ({ w: innerWidth, h: innerHeight }));
     const cx = box.w / 2;
     await page.mouse.click(cx, box.h * 0.51);
@@ -179,7 +175,7 @@ async function main() {
   await shot('04-reports');
   check('the reports entry opens', wentToReports, `at ${page.url()}`);
 
-  const clickedExcel = await clickNamed('Excel');
+  const clickedExcel = await clickNamed('إكسل');
   const arrived = await waitForDownload(before);
   check(
     'an export button downloads a spreadsheet file',
@@ -220,7 +216,7 @@ async function main() {
   await shot('06-import');
   check('the import entry opens', wentToImport, `at ${page.url()}`);
 
-  const clickedTemplate = await clickNamed('نموذج');
+  const clickedTemplate = await clickNamed('القالب');
   const templateArrived = await waitForDownload(beforeTemplate);
   check(
     'the template button downloads a file',
@@ -234,7 +230,7 @@ async function main() {
   try {
     const [chooser] = await Promise.all([
       page.waitForFileChooser({ timeout: 8000 }),
-      clickNamed('اختيار'),
+      clickNamed('اختر'),
     ]);
     // Any small spreadsheet the server can parse; the fixture is written here
     // so the tool travels alone.
@@ -261,13 +257,13 @@ async function main() {
   try {
     const [chooser] = await Promise.all([
       page.waitForFileChooser({ timeout: 8000 }),
-      clickNamed('اختيار'),
+      clickNamed('اختر'),
     ]);
     await chooser.dismiss();
     await new Promise((r) => setTimeout(r, 1500));
     const [chooser2] = await Promise.all([
       page.waitForFileChooser({ timeout: 8000 }),
-      clickNamed('اختيار'),
+      clickNamed('اختر'),
     ]);
     await chooser2.dismiss();
     cancelRecovered = true;
