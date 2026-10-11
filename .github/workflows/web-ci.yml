@@ -170,8 +170,20 @@ jobs:
           DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=erp_kayan
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: |
-          node scripts/prepare-database.mjs
-          npm run seed
+          set +e
+          node scripts/prepare-database.mjs > /tmp/dbprep.txt 2>&1
+          s1=$?
+          cat /tmp/dbprep.txt
+          npm run seed > /tmp/seed.txt 2>&1
+          s2=$?
+          cat /tmp/seed.txt
+          set -e
+          if [ "$s1" -ne 0 ] || [ "$s2" -ne 0 ]; then
+            cat /tmp/dbprep.txt /tmp/seed.txt | tail -10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
 
       - name: Take the web build
         uses: actions/download-artifact@v4

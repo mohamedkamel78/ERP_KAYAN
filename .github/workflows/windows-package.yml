@@ -125,7 +125,12 @@ jobs:
           Write-Host "--- the end of the build log ---"
           Get-Content build\build-log.txt -Tail 60
           Write-Host "--- the build script exited with $code ---"
-          if ($code -ne 0) { throw "the build script failed with exit code $code" }
+          if ($code -ne 0) {
+            Get-Content build\build-log.txt -Tail 10 | ForEach-Object {
+              Write-Output ("::error::" + ($_ -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'))
+            }
+            throw "the build script failed with exit code $code"
+          }
 
       - name: Check that the result is really shippable
         shell: pwsh

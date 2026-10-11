@@ -273,21 +273,26 @@ if (-not $pgBin) {
     if (-not $haveZip) { Remove-Item -Force $zipFile }
   }
   if (-not $haveZip) {
-    try {
-      $ProgressPreference = 'SilentlyContinue'
-      Invoke-WebRequest -Uri $zipUrl -OutFile $zipFile -UseBasicParsing
-    } catch {
+    # curl.exe ships with Windows and speaks TLS 1.2 out of the box; the
+    # PowerShell 5.1 downloader on a fresh runner can be negotiated down to
+    # TLS 1.0 and fail against the CDN.
+    & curl.exe -fsSL --retry 3 --retry-delay 2 -o $zipFile $zipUrl
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipFile)) {
       Fail ("Could not download PostgreSQL tools from $zipUrl . Download the " +
             "file in a browser, save it as $zipFile, and run this script again " +
             "(or run scripts\install-postgres-portable.bat once).")
     }
   }
   if ((Get-Item $zipFile).Length -le 300000000) {
-    Fail "The downloaded PostgreSQL archive looks truncated ($zipFile). Delete it and run this script again."
+    Fail "The downloaded PostgreSQL archive looks truncated ($($zipFile)). Delete it and run this script again."
   }
   # The archive unpacks into a top-level folder named pgsql - the same
-  # layout install-postgres-portable.bat produces.
-  Expand-Archive -Path $zipFile -DestinationPath $toolsFolder -Force
+  # layout install-postgres-portable.bat produces. tar.exe handles the zip
+  # without loading it into memory first.
+  & tar.exe -xf $zipFile -C $toolsFolder
+  if ($LASTEXITCODE -ne 0) {
+    Fail "The PostgreSQL archive at $zipFile could not be unpacked. Delete it and run this script again."
+  }
   if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
     Fail ("The PostgreSQL archive did not unpack to $portablePg . Run " +
           "scripts\install-postgres-portable.bat once, then run this script again.")
