@@ -1,4 +1,8 @@
-import { BadRequestException } from '@nestjs/common';
+import {
+  BadRequestException,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import * as childProcess from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -17,6 +21,7 @@ describe('FullBackupService guards', () => {
   const originalBackupDir = process.env.KAYAN_BACKUP_DIR;
   const originalPgDump = process.env.KAYAN_PG_DUMP;
   const originalPgRestore = process.env.KAYAN_PG_RESTORE;
+  const originalDatabaseUrl = process.env.DATABASE_URL;
   const temporaryDirs: string[] = [];
 
   function mockPgDumpVersion(version: string): void {
@@ -50,6 +55,11 @@ describe('FullBackupService guards', () => {
       process.env.KAYAN_PG_RESTORE = originalPgRestore;
     }
     jest.mocked(childProcess.execFile).mockReset();
+    if (originalDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = originalDatabaseUrl;
+    }
     for (const dir of temporaryDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -188,6 +198,110 @@ describe('FullBackupService guards', () => {
       const service = serviceWithEnv(temporaryDir('kayan-backups-'));
       await expect(service.restore({ confirm: true }, 'u1')).rejects.toBeInstanceOf(
         BadRequestException,
+      );
+    });
+  });
+
+  describe('machine problems are explained, never "unexpected server error"', () => {
+    function fakeTools(dir: string): void {
+      const tool = join(dir, 'pg_dump');
+      writeFileSync(tool, '');
+      process.env.KAYAN_PG_DUMP = tool;
+      process.env.KAYAN_PG_RESTORE = tool;
+      // The command line is built from the connection string; it never
+      // leaves the process environment, but it has to exist.
+      process.env.DATABASE_URL =
+        'postgresql://test:test@127.0.0.1:5432/kayan_test';
+      mockPgDumpVersion('pg_dump (PostgreSQL) 16.2');
+    }
+
+    it('a backup folder that cannot be created says so and names KAYAN_BACKUP_DIR', async () => {
+      // A folder path under a plain file cannot be created on any system -
+      // the same failure as a read-only Program Files install on Windows.
+      const dir = temporaryDir('kayan-backups-');
+      const blocker = join(dir, 'blocker');
+      writeFileSync(blocker, 'not a folder');
+      process.env.KAYAN_BACKUP_DIR = join(blocker, 'backups');
+      fakeTools(dir);
+
+      const service = new FullBackupService(
+        {} as any,
+        { record: async () => {} } as any,
+        { begin() {}, end() {}, isActive: false, status: {} } as any,
+      );
+      await expect(service.createFull('u1')).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      );
+      await expect(service.createFull('u1')).rejects.toThrow(/KAYAN_BACKUP_DIR/);
+    });
+
+    it('a missing backup file is a 404, not a crash', async () => {
+      const service = serviceWithEnv(temporaryDir('kayan-backups-'));
+      await expect(service.read('kayan-full-2026-01-01-00-00-00.dump')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      await expect(
+        service.remove('kayan-full-2026-01-01-00-00-00.dump', 'u1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('a full backup is reported only after the file exists and is a real archive', async () => {
+      const dir = temporaryDir('kayan-backups-');
+      fakeTools(dir);
+      // The "pg_dump" writes a Custom-format file where it was told to.
+      jest.mocked(childProcess.execFile).mockImplementation(
+        ((_, args, ___, callback) => {
+          const fileArg = (args as string[]).find((a) => a.startsWith('--file='));
+          writeFileSync(
+            String(fileArg).slice('--file='.length),
+            Buffer.concat([Buffer.from('PGDMP', 'latin1'), Buffer.alloc(32)]),
+          );
+          const complete = callback as (
+            error: Error | null,
+            stdout: string,
+            stderr: string,
+          ) => void;
+          complete(null, '', '');
+          return {} as childProcess.ChildProcess;
+        }) as typeof childProcess.execFile,
+      );
+
+      const audits: unknown[] = [];
+      const service = new FullBackupService(
+        {} as any,
+        { record: async (input: unknown) => audits.push(input) } as any,
+        { begin() {}, end() {}, isActive: false, status: {} } as any,
+      );
+      const result = await service.createFull('u1');
+      expect(result.file.name).toMatch(/^kayan-full-.*\.dump$/);
+      expect(result.file.sizeBytes).toBeGreaterThan(0);
+      expect(audits).toHaveLength(1);
+    });
+
+    it('a backup that is not a PGDMP archive is discarded and refused', async () => {
+      const dir = temporaryDir('kayan-backups-');
+      fakeTools(dir);
+      jest.mocked(childProcess.execFile).mockImplementation(
+        ((_, args, ___, callback) => {
+          const fileArg = (args as string[]).find((a) => a.startsWith('--file='));
+          writeFileSync(String(fileArg).slice('--file='.length), 'not a dump');
+          const complete = callback as (
+            error: Error | null,
+            stdout: string,
+            stderr: string,
+          ) => void;
+          complete(null, '', '');
+          return {} as childProcess.ChildProcess;
+        }) as typeof childProcess.execFile,
+      );
+
+      const service = new FullBackupService(
+        {} as any,
+        { record: async () => {} } as any,
+        { begin() {}, end() {}, isActive: false, status: {} } as any,
+      );
+      await expect(service.createFull('u1')).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
       );
     });
   });

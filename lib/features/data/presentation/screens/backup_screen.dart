@@ -74,11 +74,18 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
 
   Future<void> _download() async {
     final url = await ref.read(reportLinkProvider).backup();
-    openInNewTab(url);
+    downloadFile(url);
   }
 
   Future<void> _choose() async {
-    final picked = await pickFile(extensions: ['.json']);
+    PickedFile? picked;
+    try {
+      picked = await pickFile(extensions: ['.json']);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _failure = describeApiError(error));
+      return;
+    }
     if (picked == null) return;
     setState(() {
       _file = picked;

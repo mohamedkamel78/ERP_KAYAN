@@ -84,7 +84,7 @@ class _FullBackupSectionState extends ConsumerState<FullBackupSection> {
 
   Future<void> _download(String name) async {
     final url = await ref.read(reportLinkProvider).fullBackupDownload(name);
-    openInNewTab(url);
+    downloadFile(url);
   }
 
   Future<void> _delete(String name) async {
@@ -196,7 +196,14 @@ class _FullBackupSectionState extends ConsumerState<FullBackupSection> {
   }
 
   Future<void> _uploadAndRestore() async {
-    final picked = await pickFile(extensions: ['.dump']);
+    PickedFile? picked;
+    try {
+      picked = await pickFile(extensions: ['.dump']);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _failure = describeApiError(error));
+      return;
+    }
     if (picked == null) return;
     await _restore(file: picked);
   }
