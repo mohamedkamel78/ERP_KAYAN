@@ -167,7 +167,7 @@ jobs:
       - name: Prepare the database
         working-directory: backend
         env:
-          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=erp_kayan
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: |
           set +e
@@ -193,7 +193,7 @@ jobs:
 
       - name: Start the server with the web client
         env:
-          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=erp_kayan
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
           KAYAN_WEB_ROOT: ${{ github.workspace }}/web
           KAYAN_BACKUP_DIR: /tmp/kayan-backups
         run: |

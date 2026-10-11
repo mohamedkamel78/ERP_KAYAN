@@ -238,9 +238,12 @@ if (Test-Path (Join-Path $portablePg "pg_dump.exe")) {
 }
 if (-not $pgBin) {
   $candidates = @()
-  foreach ($root in @("${env:ProgramFiles}\PostgreSQL", "${env:ProgramFiles(x86)}\PostgreSQL")) {
-    if ($root -and (Test-Path $root)) {
-      foreach ($versionDir in (Get-ChildItem $root -Directory -ErrorAction SilentlyContinue)) {
+  # The folder name here must not be $root: that name holds the repository
+  # root for the rest of the script, and a clobbered $root sends every later
+  # path (the window icon, the program folder) looking in the wrong place.
+  foreach ($installRoot in @("${env:ProgramFiles}\PostgreSQL", "${env:ProgramFiles(x86)}\PostgreSQL")) {
+    if ($installRoot -and (Test-Path $installRoot)) {
+      foreach ($versionDir in (Get-ChildItem $installRoot -Directory -ErrorAction SilentlyContinue)) {
         $bin = Join-Path $versionDir.FullName "bin"
         if (Test-Path (Join-Path $bin "pg_dump.exe")) { $candidates += $bin }
       }
