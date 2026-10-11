@@ -97,7 +97,7 @@ void main() {
     test('changing the mode throws the old dry run away', () {
       final controller = container.read(importControllerProvider.notifier);
       controller.succeeded(report(dryRun: true, created: 2));
-      controller.chooseMode(ImportMode.update);
+      controller.chooseMode(ImportMode.upsert);
       expect(container.read(importControllerProvider).readyToCommit, isFalse);
     });
 
