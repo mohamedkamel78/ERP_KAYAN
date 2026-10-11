@@ -1,12 +1,11 @@
 import 'dart:async';
+import 'dart:typed_data';
 // The browser's own API, used on purpose: a file the user chooses, a tab
 // opened for a print page and a download started behind the scenes are things
 // only the page itself can do. This file is compiled for the web build and
 // nothing else - see browser_actions.dart.
 // ignore: avoid_web_libraries_in_flutter, deprecated_member_use
 import 'dart:html' as html;
-// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
-import 'dart:js_util' as js_util;
 
 import 'picked_file.dart';
 
@@ -81,10 +80,13 @@ void _printFromHiddenFrame(String url) {
     // For anything else that lands here, print what arrived - a call across
     // origins can be refused, which is fine: the frame did what it could.
     Timer(const Duration(milliseconds: 300), () {
-      final window = frame.contentWindow;
+      // window.print() across frames: the type of a frame's window does not
+      // carry print(), so the call goes through - which is what the browser
+      // understands, and what is refused across origins can be caught.
+      final dynamic window = frame.contentWindow;
       if (window == null) return;
       try {
-        js_util.callMethod<Object?>(window, 'print', const []);
+        window.print();
       } catch (_) {
         /* cross-origin or already printed: nothing more to do */
       }

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:erp_kayan/core/platform/picked_file.dart';
 import 'package:erp_kayan/features/data/presentation/providers/data_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
