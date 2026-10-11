@@ -355,6 +355,13 @@ class LocalBackend {
         [layout.entryPoint],
         workingDirectory: layout.backendDirectory,
         environment: {
+          // Backups belong with the machine's other data, never inside the
+          // program folder: a copy installed under Program Files is not
+          // writable, and the folder is replaced on update. This matches
+          // what the package README promises about %APPDATA%. A value the
+          // user wrote into kayan.env wins over this default.
+          'KAYAN_BACKUP_DIR': '${layout.dataDirectory.path}'
+              '${Platform.pathSeparator}backups',
           ...settings.asEnvironment(port),
           // The desktop server is private to this machine.
           'HOST': '127.0.0.1',

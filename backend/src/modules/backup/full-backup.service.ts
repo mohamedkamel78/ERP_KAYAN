@@ -328,7 +328,14 @@ export class FullBackupService {
     if (!existsSync(path)) {
       throw new NotFoundException(`No backup file named "${name}" on this server`);
     }
-    return { data: await readFile(path), name };
+    try {
+      return { data: await readFile(path), name };
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        `The backup file "${name}" could not be read ` +
+          `(${(error as Error).message}). The database was not changed.`,
+      );
+    }
   }
 
   async remove(name: string, userId: string): Promise<void> {
@@ -336,7 +343,14 @@ export class FullBackupService {
     if (!existsSync(path)) {
       throw new NotFoundException(`No backup file named "${name}" on this server`);
     }
-    await unlink(path);
+    try {
+      await unlink(path);
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        `The backup file "${name}" could not be deleted ` +
+          `(${(error as Error).message}). Nothing else was changed.`,
+      );
+    }
     await this.audit.record({
       action: 'DELETE',
       entity: 'backup_full',
@@ -383,14 +397,29 @@ export class FullBackupService {
 
     const dir = await this.ensureBackupDir();
     const staging = join(dir, `.restore-staging-${Date.now()}.dump`);
-    await writeFile(staging, buffer);
+    try {
+      await writeFile(staging, buffer);
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        `The upload could not be written to "${dir}" ` +
+          `(${(error as Error).message}). Set KAYAN_BACKUP_DIR to a folder ` +
+          'this program may write to, then try again.',
+      );
+    }
 
     try {
       // 2. A scratch database: the file must restore cleanly somewhere before
       //    it is allowed to restore here.
       const scratchName = `kayan_restore_check_${Date.now()}`;
       this.logger.log(`Restoring into scratch database ${scratchName} first`);
-      await this.execSql(`CREATE DATABASE "${scratchName}"`);
+      try {
+        await this.execSql(`CREATE DATABASE "${scratchName}"`);
+      } catch (error) {
+        throw new ServiceUnavailableException(
+          'The restore could not open a test database on this PostgreSQL ' +
+            `(${(error as Error).message}). The current data was not touched.`,
+        );
+      }
       try {
         await run(tools.pgRestore as string, [
           '--exit-on-error',
@@ -587,7 +616,21 @@ export class FullBackupService {
 
   private async ensureBackupDir(): Promise<string> {
     const dir = this.backupDir();
-    await mkdir(dir, { recursive: true });
+    try {
+      await mkdir(dir, { recursive: true });
+    } catch (error) {
+      // A folder the program cannot create (a read-only install directory,
+      // a missing drive, a permission) is a machine problem with an obvious
+      // fix worth naming - not a mystery "unexpected server error".
+      this.logger.error(
+        `Could not create the backup folder ${dir}: ${(error as Error).message}`,
+      );
+      throw new ServiceUnavailableException(
+        `Backups cannot be written to "${dir}" on this machine ` +
+          `(${(error as Error).message}). Set KAYAN_BACKUP_DIR to a folder ` +
+          'this program may write to, then try again.',
+      );
+    }
     return dir;
   }
 
@@ -619,11 +662,17 @@ export class FullBackupService {
       );
     }
     const head = Buffer.alloc(5);
-    const handle = await open(path, 'r');
+    let handle;
     try {
+      handle = await open(path, 'r');
       await handle.read(head, 0, 5, 0);
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        `The backup file "${name}" could not be read back for checking ` +
+          `(${(error as Error).message}). The database was not changed.`,
+      );
     } finally {
-      await handle.close();
+      await handle?.close();
     }
     if (!head.equals(CUSTOM_MAGIC)) {
       await unlink(path).catch(() => {});

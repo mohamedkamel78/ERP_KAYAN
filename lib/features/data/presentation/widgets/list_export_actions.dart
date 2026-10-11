@@ -48,10 +48,15 @@ class ListExportActions extends ConsumerWidget {
       openInNewTab(await link);
     }
 
-    Future<void> download(String format) =>
-        open(links.listFile(list: list, format: format, language: language, filters: filters));
+    Future<void> download(String format) async {
+      downloadFile(await links.listFile(list: list, format: format, language: language, filters: filters));
+    }
 
-    void print(bool auto) => open(
+    Future<void> downloadPdf() async {
+      downloadFile(await links.listPdf(list: list, language: language, filters: filters));
+    }
+
+    Future<void> print(bool auto) => open(
           links.listPrint(list: list, language: language, auto: auto, filters: filters),
         );
 
@@ -61,7 +66,7 @@ class ListExportActions extends ConsumerWidget {
       onSelected: (choice) => switch (choice) {
         'xlsx' => download('xlsx'),
         'csv' => download('csv'),
-        'pdf' => open(links.listPdf(list: list, language: language, filters: filters)),
+        'pdf' => downloadPdf(),
         'print' => print(true),
         'paper' => print(false),
         _ => null,

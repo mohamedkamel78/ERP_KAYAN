@@ -32,6 +32,7 @@ runs one company per installation.
 | `backend/src/common/maintenance/` | Write-blocking interceptor used during restores |
 | `backend/src/common/localization/account-name.ts` | The one account-name rule (server side) |
 | `lib/shared/utils/account_name.dart` | The same rule, client side — keep them identical |
+| `lib/core/platform/browser_actions.dart` | Downloads, print pages, file picking — one API, web + desktop implementations |
 | `lib/features/settings/` | Company settings screen (profile, logo, units) |
 | `lib/features/data/` | Backup screen: full DB section + per-company JSON section |
 | `backend/prisma/migrations/` | Additive migrations, applied in order |
@@ -211,11 +212,18 @@ The packaged program carries `pg_dump`/`pg_restore` (+ their DLLs) inside
 (`%LOCALAPPDATA%\kayan-tools\pgsql`, provisioned by
 `scripts/install-postgres-portable.bat`) or from an installed PostgreSQL,
 newest first, and refuses to finish if the copies cannot answer `--version`.
+On a machine with neither, `scripts/build-desktop-windows.ps1` provisions the
+same portable toolchain itself (same download and folder as the installer
+script; tools only — no service, no data folder). The Windows packaging
+workflow installs Inno Setup and fails unless **both** deliverables exist:
+`KAYAN-ERP-windows.zip` and `KAYAN-ERP-Setup-1.0.0.exe`.
 `scripts/verify-package.ps1` checks the same at packaging time. At runtime the
 lookup order is: `KAYAN_PG_DUMP`/`KAYAN_PG_RESTORE` → `backend\pg` (the
 package's own copy) → the portable toolchain → `PATH` → installed PostgreSQL;
 `GET /backup/full/capabilities` reports the chosen tools, the server version
-and a warning when pg_dump is older than the server.
+and a warning when pg_dump is older than the server. The desktop shell points
+`KAYAN_BACKUP_DIR` at `%APPDATA%\KAYAN-ERP\backups`, so a Program Files
+install never tries to write inside its own (read-only) folder.
 
 ## 6.5 The application icon
 

@@ -1,12 +1,16 @@
 /// What the program asks the browser to do on the user's behalf.
 ///
-/// Two things a page cannot do from Dart alone: open a URL in a new tab (a
-/// report download, a print page) and read a file the user chooses. Both have
-/// to go through the platform, so this picks the right implementation when the
-/// program is compiled.
+/// Three things a page cannot do from Dart alone:
 ///
-/// The web build is the real one. On any other target the calls report that
-/// they need a browser rather than failing silently.
+///  * save a file the server sends as an attachment (`downloadFile`);
+///  * open a page meant to be printed (`openInNewTab`);
+///  * read a file the user chooses (`pickFile`).
+///
+/// All three have to go through the platform, so this picks the right
+/// implementation when the program is compiled. The web build talks to the
+/// browser's own APIs; any other target hands URLs to the machine's default
+/// browser and uses the system file dialogue, so a button that is clicked
+/// does something rather than failing silently.
 library;
 
 export 'browser_actions_stub.dart'

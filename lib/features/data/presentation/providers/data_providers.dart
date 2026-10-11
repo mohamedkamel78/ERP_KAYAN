@@ -237,17 +237,20 @@ class ImportController extends Notifier<ImportState> {
     state = ImportState(kind: kind);
   }
 
-  void chooseMode(ImportMode mode) => state = state.copyWith(mode: mode);
+  void chooseMode(ImportMode mode) {
+    // The dry run counted what would happen in the old mode; those numbers
+    // cannot vouch for the button that writes in the new one.
+    state = state.copyWith(mode: mode, clearReport: true);
+  }
 
   void chooseFile(PickedFile? file) => state = state.copyWith(
     file: file,
-    report: null,
-    failure: null,
     clearFile: file == null,
+    clearReport: true,
   );
 
   void beginning() =>
-      state = state.copyWith(busy: true, failure: null, report: null);
+      state = state.copyWith(busy: true, failure: null, clearReport: true);
 
   void succeeded(ImportReport report) =>
       state = state.copyWith(busy: false, report: report, failure: null);
@@ -292,6 +295,7 @@ class ImportState {
     bool clearFile = false,
     bool? busy,
     ImportReport? report,
+    bool clearReport = false,
     String? failure,
   }) {
     return ImportState(
@@ -299,7 +303,9 @@ class ImportState {
       mode: mode ?? this.mode,
       file: clearFile ? null : (file ?? this.file),
       busy: busy ?? this.busy,
-      report: report ?? this.report,
+      // A report can be replaced, and it can be thrown away - but it must
+      // never survive a change that makes its numbers meaningless.
+      report: clearReport ? null : (report ?? this.report),
       failure: failure,
     );
   }

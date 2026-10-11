@@ -47,9 +47,12 @@ class ReportExportActions extends ConsumerWidget {
     final capabilities = ref.watch(exportCapabilitiesProvider);
     final pdfReady = capabilities.asData?.value.pdfOnTheServer ?? false;
 
-    Future<void> go(Future<String> link) async {
-      final url = await link;
-      openInNewTab(url);
+    Future<void> download(Future<String> link) async {
+      downloadFile(await link);
+    }
+
+    Future<void> showPage(Future<String> link) async {
+      openInNewTab(await link);
     }
 
     return Wrap(
@@ -59,7 +62,7 @@ class ReportExportActions extends ConsumerWidget {
       children: [
         OutlinedButton.icon(
           onPressed: ready
-              ? () => go(
+              ? () => download(
                     links.file(
                       report: report,
                       format: 'xlsx',
@@ -75,7 +78,7 @@ class ReportExportActions extends ConsumerWidget {
         ),
         OutlinedButton.icon(
           onPressed: ready
-              ? () => go(
+              ? () => download(
                     links.file(
                       report: report,
                       format: 'csv',
@@ -92,7 +95,7 @@ class ReportExportActions extends ConsumerWidget {
         if (pdfReady)
           FilledButton.tonalIcon(
             onPressed: ready
-                ? () => go(
+                ? () => download(
                       links.pdf(
                         report: report,
                         language: language,
@@ -111,7 +114,7 @@ class ReportExportActions extends ConsumerWidget {
           message: pdfReady ? l10n.printPdfHint : l10n.printHintWhenNoPdf,
           child: OutlinedButton.icon(
             onPressed: ready
-                ? () => go(
+                ? () => showPage(
                       links.print(
                         report: report,
                         language: language,
