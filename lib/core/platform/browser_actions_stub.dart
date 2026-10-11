@@ -9,7 +9,6 @@ library;
 
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'picked_file.dart';
 

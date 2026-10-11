@@ -65,7 +65,21 @@ jobs:
         run: flutter pub get
 
       - name: Analyze Flutter code
-        run: flutter analyze
+        run: |
+          set -o pipefail
+          flutter analyze 2>&1 | tee /tmp/analyze.txt || true
+          if grep -q "issue" /tmp/analyze.txt; then
+            {
+              echo '### flutter analyze'
+              echo '```'
+              cat /tmp/analyze.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -E "^(error|warning|info) •" /tmp/analyze.txt | head -20 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
 
       - name: Run Flutter tests
         run: flutter test
