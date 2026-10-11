@@ -31,6 +31,17 @@ on:
       - "pubspec.lock"
       - ".github/workflows/windows-package.yml"
     tags: ["v*"]
+  pull_request:
+    # Before a change is merged, prove on a real Windows machine that the
+    # package still builds and both deliverables still exist.
+    paths:
+      - "backend/**"
+      - "lib/**"
+      - "windows/**"
+      - "scripts/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/windows-package.yml"
   workflow_dispatch:
 
 permissions:
