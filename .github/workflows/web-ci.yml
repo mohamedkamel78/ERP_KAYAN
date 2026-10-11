@@ -87,7 +87,24 @@ jobs:
           exit "$status"
 
       - name: Run Flutter tests
-        run: flutter test
+        run: |
+          set +e
+          flutter test > /tmp/test.txt 2>&1
+          status=$?
+          set -e
+          tail -n 60 /tmp/test.txt
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### flutter test'
+              echo '```'
+              tail -n 120 /tmp/test.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -nE "\[E\]|Expected:|Actual:|Exception|The following|failed" /tmp/test.txt | head -10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"
 
       - name: Build Flutter Web (Release)
         run: flutter build web --release
