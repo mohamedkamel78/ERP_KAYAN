@@ -236,43 +236,37 @@ Step "5/8" "Bundling the PostgreSQL backup tools (pg_dump / pg_restore)"
 $pgBin = $null
 $toolsFolder = Join-Path $env:LOCALAPPDATA "kayan-tools"
 $portablePg = Join-Path $toolsFolder "pgsql\bin"
-if (Test-Path (Join-Path $portablePg "pg_dump.exe")) {
-  $pgBin = $portablePg
-  Write-Host "      using the portable EDB PostgreSQL toolchain at $portablePg"
+# Always use a clean extraction of the official EDB archive. Reusing
+# %LOCALAPPDATA%\\kayan-tools\\pgsql is unsafe: an older developer helper or
+# an unrelated PostgreSQL build can leave binaries compiled against an absolute
+# build-machine timezone path. That makes the installed database fail at startup.
+$pgVersion = "17.7"
+$zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
+$zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
+Write-Host "      preparing the official EDB PostgreSQL $pgVersion distribution"
+New-Item -ItemType Directory -Force -Path $toolsFolder | Out-Null
+if (Test-Path $zipFile -and (Get-Item $zipFile).Length -le 300000000) {
+  Remove-Item -Force $zipFile
 }
-if (-not $pgBin) {
-  # The Windows runner may have PostgreSQL tools from unrelated build
-  # packages. Some are compiled with a fixed build-machine share path and
-  # will fail initdb after being moved into the installer. Always bundle the
-  # official EDB portable distribution instead of copying an arbitrary local
-  # PostgreSQL installation.
-  $pgVersion = "17.7"
-  $zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
-  $zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
-  Write-Host "      provisioning the official portable EDB PostgreSQL $pgVersion toolchain into $toolsFolder"
-  New-Item -ItemType Directory -Force -Path $toolsFolder | Out-Null
-  $haveZip = $false
-  if (Test-Path $zipFile) {
-    $haveZip = (Get-Item $zipFile).Length -gt 300000000
-    if (-not $haveZip) { Remove-Item -Force $zipFile }
+if (-not (Test-Path $zipFile)) {
+  & curl.exe -fsSL --retry 3 --retry-delay 2 -o $zipFile $zipUrl
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipFile)) {
+    Fail ("Could not download the official EDB PostgreSQL archive from $zipUrl.")
   }
-  if (-not $haveZip) {
-    & curl.exe -fsSL --retry 3 --retry-delay 2 -o $zipFile $zipUrl
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipFile)) {
-      Fail ("Could not download the official EDB PostgreSQL archive from $zipUrl. The installer must not use unrelated system binaries.")
-    }
-  }
-  if ((Get-Item $zipFile).Length -le 300000000) {
-    Fail "The downloaded PostgreSQL archive looks truncated ($($zipFile)). Delete it and run this script again."
-  }
-  & tar.exe -xf $zipFile -C $toolsFolder
-  if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
-  if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
-    Fail "The official EDB PostgreSQL archive did not unpack to $portablePg."
-  }
-  $pgBin = $portablePg
-  Write-Host "      official EDB PostgreSQL tools are ready at $portablePg"
 }
+if ((Get-Item $zipFile).Length -le 300000000) {
+  Fail "The PostgreSQL archive is incomplete. Refusing to package it."
+}
+$stalePg = Join-Path $toolsFolder "pgsql"
+if (Test-Path $stalePg) { Remove-Item -Recurse -Force $stalePg }
+& tar.exe -xf $zipFile -C $toolsFolder
+if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
+$portablePg = Join-Path $toolsFolder "pgsql\\bin"
+if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
+  Fail "The official EDB PostgreSQL archive did not unpack to $portablePg."
+}
+$pgBin = $portablePg
+Write-Host "      official EDB PostgreSQL binaries extracted cleanly"
 $pgFolder = Join-Path $backendFolder "pg"
 New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
 foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe")) {
