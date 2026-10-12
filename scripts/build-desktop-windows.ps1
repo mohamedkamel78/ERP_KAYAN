@@ -421,7 +421,7 @@ Set-Content -Path (Join-Path $appFolder "README.txt") -Value $note -Encoding UTF
 
 # The assembled folder is an intermediate input only. Never create a ZIP.
 
-# ------------------------------------------------------- 7. installer (optional)
+# ------------------------------------------------------- 7. installer (required)
 Step "8/8" "Making the installer a customer can run"
 $installer = $null
 $iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
@@ -462,7 +462,6 @@ Write-Host ""
 Write-Host "  Try it now:"
 Write-Host "      $appFolder\erp_kayan.exe"
 Write-Host ""
-Write-Host "  To put it on another machine: copy the zip, unpack it anywhere, and"
-Write-Host "  double-click erp_kayan.exe. That machine needs PostgreSQL, and nothing"
-Write-Host "  else."
 Write-Host ""
+
+Write-Host "  Deliver only KAYAN-Setup.exe. Do not distribute the intermediate folder."
