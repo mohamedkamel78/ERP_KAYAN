@@ -300,6 +300,8 @@ async function main() {
   );
 
   for (const [path, label] of [
+    ['/company/profile', 'the company profile'],
+    ['/company/branches', 'the company branches'],
     ['/accounting/chart-of-accounts', 'the chart of accounts'],
     ['/parties/customers', 'the customers list'],
     ['/parties/suppliers', 'the suppliers list'],
@@ -312,6 +314,15 @@ async function main() {
     const answer = await call(path);
     check(`${label} answers`, answer.status === 200, `status ${answer.status}`);
   }
+
+  const profileRes = await call('/company/profile');
+  check(
+    'the company profile carries identity and names for the dashboard',
+    profileRes.status === 200 &&
+      Boolean(profileRes.data?.nameAr || profileRes.data?.nameEn) &&
+      Boolean(profileRes.data?.code),
+    `code=${profileRes.data?.code}, nameAr=${profileRes.data?.nameAr}`,
+  );
 
   // ──────────────────────────────────── 6. exports, printing, imports
   async function ticketed(path) {

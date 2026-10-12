@@ -559,6 +559,19 @@ async function main() {
       return 1;
     }
 
+    // Verify the company identity is visible on the dashboard:
+    const dashboardLabels = await publishedLabels();
+    const hasCompanyIdentity = dashboardLabels.some(
+      (node) =>
+        /شركة|كيان|kayan|company|code/i.test(node.label) ||
+        /شركة|كيان|kayan|company|code/i.test(node.text),
+    );
+    check(
+      'the dashboard displays the company identity and name',
+      hasCompanyIdentity,
+      'company information rendered in dashboard banner',
+    );
+
     // ───────────────────────────────────────────── 2. export download
     const before = downloads.length;
     const wentToReports = await clickNamed(['التقارير', 'Reports'], { step: 'nav-reports' });
