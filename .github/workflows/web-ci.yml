@@ -85,7 +85,7 @@ jobs:
               cat /tmp/analyze.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            head -n 25 /tmp/analyze.txt | while IFS= read -r line; do
+            tail -n 30 /tmp/analyze.txt | while IFS= read -r line; do
               echo "::error::${line}"
             done
           fi
