@@ -85,7 +85,7 @@ jobs:
       - name: Install Inno Setup (the installer a customer runs)
         shell: pwsh
         run: |
-          # The package is the deliverable: both the folder zip AND the
+          # The package is the deliverable: the single setup installer
           # one-file installer must come out of every build, so the compiler
           # that makes the installer is installed here rather than left to
           # chance. Inno Setup is free and leaves no runtime dependency in
@@ -129,6 +129,29 @@ jobs:
             throw "the build script failed with exit code $code"
           }
 
+      - name: Sign installer when a trusted certificate is configured
+        shell: pwsh
+        env:
+          KAYAN_SIGNING_CERT_PFX_BASE64: ${{ secrets.KAYAN_SIGNING_CERT_PFX_BASE64 }}
+          KAYAN_SIGNING_CERT_PASSWORD: ${{ secrets.KAYAN_SIGNING_CERT_PASSWORD }}
+        run: |
+          $setup = "build\\desktop\\KAYAN-Setup.exe"
+          if (-not $env:KAYAN_SIGNING_CERT_PFX_BASE64 -or -not $env:KAYAN_SIGNING_CERT_PASSWORD) {
+            Write-Warning "Installer is unsigned. Windows SmartScreen may still warn; a trusted code-signing certificate is required to establish publisher reputation."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "kayan-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:KAYAN_SIGNING_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\\Windows Kits\\10\\bin\\*\\x64\\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "Windows SDK signtool.exe was not found." }
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:KAYAN_SIGNING_CERT_PASSWORD /tr "http://timestamp.digicert.com" /td SHA256 $setup
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed." }
+          & $signtool.FullName verify /pa /v $setup
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signature verification failed." }
+          Remove-Item $pfx -Force
+          Write-Host "Installer signature verified."
+ 
       - name: Check that the result is really shippable
         shell: pwsh
         run: |
