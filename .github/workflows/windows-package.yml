@@ -1,7 +1,7 @@
 # Builds the real Windows copy of KAYAN ERP, on a real Windows machine.
 #
 # Why this exists: `flutter build windows` needs Windows and Visual Studio, so
-# the program cannot be built on a Linux or macOS workstation. This workflow is
+# the program cannot be built on a Linux or macOS workstation. PRs and pushes to main use this workflow to
 # the build machine. It runs the very same script a developer would run
 # (scripts\build-desktop-windows.ps1), then asks whether the result is really
 # shippable (scripts\verify-package.ps1), and keeps the output.
@@ -18,7 +18,6 @@ on:
   push:
     branches:
       - main
-      - 'arena/**'
     paths:
       - "backend/**"
       - "lib/**"
