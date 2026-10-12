@@ -317,10 +317,21 @@ async function main() {
     // screen alone: a restore that the screen calls done but the server
     // refused is a failure.
     const answers = [];
-    page.on('response', (response) => {
+    page.on('response', async (response) => {
       const url = response.url();
       if (!/\/api\/v1\//.test(url)) return;
-      answers.push({ method: response.request().method(), url, status: response.status() });
+      const entry = { method: response.request().method(), url, status: response.status() };
+      answers.push(entry);
+      // The names in a backup list, as the server sent them: what the screen
+      // showed is only ever what the server said.
+      if (entry.method === 'GET' && response.status() === 200 && /\/backup\/full(\?|$)/.test(url)) {
+        try {
+          const body = JSON.parse(await response.text());
+          entry.files = Array.isArray(body) ? body.map((item) => item.name) : [];
+        } catch {
+          entry.files = ['(the list could not be read)'];
+        }
+      }
     });
 
     // What the server answered. The one response that matters most is the
@@ -975,8 +986,13 @@ async function main() {
     log(
       `RELOAD the page was ${originBefore !== null && originAfter !== null && originBefore !== originAfter ? 'loaded again' : 'not loaded again'} during the restore; now at ${page.url()}`,
     );
+    const listBefore = answers.slice(0, restoreMark).filter((entry) => entry.files).pop();
+    log(`LIST before the restore (${listBefore?.files?.length ?? 'none read'}): ${(listBefore?.files ?? []).join(', ')}`);
     for (const entry of answers.slice(restoreMark).slice(0, 12)) {
-      log(`AFTER-RESTORE ${entry.method} ${entry.url.split('/api/v1')[1] ?? entry.url} ${entry.status}`);
+      log(
+        `AFTER-RESTORE ${entry.method} ${entry.url.split('/api/v1')[1] ?? entry.url} ${entry.status}` +
+          (entry.files ? ` files(${entry.files.length}): ${entry.files.join(', ')}` : ''),
+      );
     }
     const restoreAnswered = Boolean(restoreAnswer && restoreAnswer.status >= 200 && restoreAnswer.status < 300);
     check(
