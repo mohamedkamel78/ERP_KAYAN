@@ -249,7 +249,7 @@ jobs:
             # the verdict, is the shape that survives.
             verdict=$(
               {
-                grep -E "^(FAIL|NAV|LABELS missed|SERVER|the browser check)" /tmp/browser.txt | tail -12
+                grep -E "^(FAIL|NAV|HTTP|SERVER|LABELS missed|the browser check)" /tmp/browser.txt | tail -14
                 grep -E "checks passed" /tmp/browser.txt | tail -1
                 # A 500 the server logged is worth more than any guess about
                 # one: the stack that followed it says which line failed.
@@ -344,10 +344,17 @@ jobs:
           npx prisma generate
           npm run build
 
+      # The role here is the one that owns the database, and it is on purpose:
+      # a restore is only a real restore if the file was put into a scratch
+      # database and read back there first, and a role that may not create a
+      # database quietly skips that step (the program says so on its
+      # capabilities route rather than hiding it). The check's own database is
+      # created for the job and thrown away with it, so the role it runs as is
+      # the job's business, and the rehearsal is proved on every run.
       - name: Prepare the database
         working-directory: backend
         env:
-          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan_api?schema=public
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/erp_kayan_api?schema=public
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
         run: |
           set +e
@@ -367,7 +374,7 @@ jobs:
 
       - name: Start the server
         env:
-          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan_api?schema=public
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/erp_kayan_api?schema=public
           KAYAN_BACKUP_DIR: /tmp/kayan-api-backups
           JWT_ACCESS_SECRET: ci-api-check-access-secret
           JWT_REFRESH_SECRET: ci-api-check-refresh-secret

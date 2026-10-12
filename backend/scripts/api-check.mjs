@@ -171,6 +171,125 @@ async function main() {
     `status ${ticketAsBearer.status}`,
   );
 
+  // ──────────────── 4d. every address a button in the program points at
+  //
+  // A download and a print page are not XHRs: the browser is *sent* to an
+  // address, and the only credential that address can carry is the ticket in
+  // it. That is the whole of requirement "short-lived download tickets, and
+  // every call site that needs one" — and a route that was missed when the
+  // tickets were introduced keeps answering 401 to a person who pressed a
+  // button and saw nothing. So every address the client is allowed to build is
+  // asked here exactly as the browser asks it: no Authorization header, only
+  // the ticket, and the answer has to be the file.
+  {
+    const exportCaps = await call('/exports/capabilities');
+    const pdfReady = exportCaps.data?.pdfOnTheServer === true;
+    const today = new Date().toISOString().slice(0, 10);
+    const january = `${today.slice(0, 4)}-01-01`;
+    const targets = [];
+
+    const catalogue = await call('/exports/lists');
+    for (const item of catalogue.data?.items ?? []) {
+      targets.push({
+        path: `/exports/lists/${item.slug}/download?format=xlsx&lang=ar`,
+        label: `the ${item.slug} list as a spreadsheet`,
+        needs: 200,
+      });
+      targets.push({
+        path: `/exports/lists/${item.slug}/print?lang=ar`,
+        label: `the ${item.slug} list as a print page`,
+        needs: 200,
+      });
+      targets.push({
+        path: `/exports/lists/${item.slug}/pdf?lang=ar`,
+        label: `the ${item.slug} list as a PDF`,
+        needs: pdfReady ? 200 : 422,
+      });
+    }
+
+    for (const report of [
+      'trial-balance',
+      'profit-and-loss',
+      'customer-balances',
+      'supplier-balances',
+    ]) {
+      const period = `from=${january}&to=${today}`;
+      targets.push({
+        path: `/exports/${report}/download?format=xlsx&lang=ar&${period}`,
+        label: `${report} as a spreadsheet`,
+        needs: 200,
+      });
+      targets.push({
+        path: `/exports/${report}/download?format=csv&lang=ar&${period}`,
+        label: `${report} as a CSV`,
+        needs: 200,
+      });
+      targets.push({
+        path: `/exports/${report}/print?lang=ar&auto=1&${period}`,
+        label: `the ${report} print page`,
+        needs: 200,
+      });
+      targets.push({
+        path: `/exports/${report}/pdf?lang=ar&${period}`,
+        label: `${report} as a PDF`,
+        needs: pdfReady ? 200 : 422,
+      });
+    }
+
+    for (const kind of ['customers', 'suppliers', 'items']) {
+      targets.push({
+        path: `/import/templates/${kind}`,
+        label: `the ${kind} import template`,
+        needs: 200,
+      });
+    }
+
+    const refusedToAnswer = [];
+    for (const target of targets) {
+      const minted = await call('/auth/download-ticket', { method: 'POST' });
+      const url =
+        `${API}${target.path}${target.path.includes('?') ? '&' : '?'}` +
+        `ticket=${encodeURIComponent(minted.data?.ticket ?? '')}`;
+      let status = 0;
+      try {
+        const answer = await fetch(url, { redirect: 'manual' });
+        status = answer.status;
+        // The bytes are not wanted; the answer is. Leaving a body unread keeps
+        // the socket busy and makes a sweep of thirty routes slow for no
+        // reason, so it is cancelled rather than drained.
+        await answer.body?.cancel().catch(() => {});
+      } catch (error) {
+        refusedToAnswer.push(`${target.label}: the request did not finish (${error.message})`);
+        continue;
+      }
+      if (status !== target.needs) {
+        refusedToAnswer.push(
+          `${target.label}: ${status}, wanted ${target.needs}`,
+        );
+      }
+    }
+
+    check(
+      `every address the program puts in a button answers on a ticket alone (${targets.length} of them)`,
+      refusedToAnswer.length === 0,
+      refusedToAnswer.slice(0, 4).join('; ') ||
+        `all ${targets.length} answered with nothing but the ticket in the address`,
+    );
+
+    // The same addresses with no ticket at all must stay shut: the sweep above
+    // is only worth anything if this one holds.
+    const bare = await fetch(
+      `${API}/exports/trial-balance/download?format=xlsx&lang=ar&from=${january}&to=${today}`,
+      { redirect: 'manual' },
+    );
+    await bare.body?.cancel().catch(() => {});
+    check(
+      'none of them opens without the ticket',
+      bare.status === 401,
+      `status ${bare.status}`,
+    );
+  }
+
   // ───────────────────────────────────────────── 5. refuse a bad upload
   const form = new FormData();
   form.append('confirm', 'true');
@@ -209,10 +328,22 @@ async function main() {
       restored.data ? ` · checked ${restored.data.checked}` : ''
     }`,
   );
+  // The rehearsal is the part of a restore that cannot be argued with: the
+  // file has to be put into a database nobody cares about and restored there,
+  // with no error, before it is allowed anywhere near this one. An
+  // installation whose database role may not create a database cannot do it —
+  // and says so on the capabilities route rather than pretending. So: it
+  // either happened, or the server has said in words why it could not.
+  const capsAfter = await call('/backup/full/capabilities');
+  const mayRehearse = capsAfter.data?.canRehearseRestore;
   check(
     'the restore was rehearsed in a scratch database first',
-    restored.data?.rehearsed === true,
-    `rehearsed=${restored.data?.rehearsed}`,
+    restored.data?.rehearsed === true || mayRehearse === false,
+    restored.data?.rehearsed === true
+      ? 'the archive was restored into a throwaway database before this one was touched'
+      : `this database role may not create one — ${
+          capsAfter.data?.rehearsalNote ?? 'see the server log'
+        }`,
   );
 
   // The program still works after being put back.
@@ -634,6 +765,66 @@ async function main() {
       noOrigin.status === 200,
       `status ${noOrigin.status}`,
     );
+  }
+
+  // ──────────────────────────────────────────────── the headers that make
+  // an address safe to open from somewhere other than this machine.
+  //
+  // A LAN address is opened by whoever is on the network; an address put
+  // behind a TLS proxy is opened by anyone on the internet. Both cases are
+  // answered by the same four headers, so they are checked here rather than
+  // assumed from the code: a page that can be framed is a click somebody else
+  // makes with this company's session, a download whose type is guessed is a
+  // file that stops being a spreadsheet, and an address that carries a
+  // one-minute download ticket must not be handed to whatever the page links
+  // to. HSTS is deliberately absent over plain HTTP - sending it from a LAN
+  // address with no certificate would lock the whole office out of it.
+  {
+    const trustsProxy = process.env.KAYAN_CHECK_TRUST_PROXY === 'true';
+    const root = API.replace(/\/api\/v1\/?$/, '');
+    const health = await fetch(`${API}/health`, { redirect: 'manual' });
+    const seen = (name) => health.headers.get(name);
+
+    check(
+      'this program cannot be framed inside someone else’s page',
+      seen('x-frame-options') === 'DENY',
+      `x-frame-options=${seen('x-frame-options') ?? 'absent'}`,
+    );
+    check(
+      'a file this program hands out stays the file it says it is',
+      seen('x-content-type-options') === 'nosniff',
+      `x-content-type-options=${seen('x-content-type-options') ?? 'absent'}`,
+    );
+    check(
+      'the address in the bar is not handed to anything the page links to',
+      seen('referrer-policy') === 'no-referrer',
+      `referrer-policy=${seen('referrer-policy') ?? 'absent'}`,
+    );
+
+    const claimsTls = await fetch(`${API}/health`, {
+      headers: { 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '203.0.113.9' },
+      redirect: 'manual',
+    });
+    const hstsSeen = claimsTls.headers.get('strict-transport-security');
+    check(
+      trustsProxy
+        ? 'a proxy’s word that the visit came over TLS is honoured with HSTS'
+        : 'a caller cannot claim TLS it did not have',
+      trustsProxy ? Boolean(hstsSeen) : hstsSeen === null,
+      `strict-transport-security=${hstsSeen ?? 'absent'} (TRUST_PROXY ${trustsProxy ? 'believed' : 'not believed'})`,
+    );
+
+    // The client itself, when this server is the one delivering it - which is
+    // how a LAN deployment and an HTTPS installation both run.
+    const index = await fetch(`${root}/`, { redirect: 'follow' }).catch(() => null);
+    if (index && (index.headers.get('content-type') ?? '').includes('html')) {
+      check(
+        'the web client is served with the same headers as the API',
+        index.headers.get('x-frame-options') === 'DENY' &&
+          index.headers.get('x-content-type-options') === 'nosniff',
+        `status ${index.status}`,
+      );
+    }
   }
 
   const failures = results.filter((result) => !result.ok);

@@ -1,0 +1,77 @@
+# KAYAN ERP - HTTPS in front of the program, with nginx
+#
+# The same job as deploy/Caddyfile.example, for the installation that already
+# runs nginx. Where Caddy gets its certificate by itself, nginx needs certbot
+# (or a certificate you brought): see the two paths under `server`.
+#
+# To use it:
+#   1. copy to /etc/nginx/sites-available/kayan, link it in sites-enabled;
+#   2. put the real domain in server_name and the real certificate paths in
+#      the ssl_ lines (certbot writes them for you);
+#   3. nginx -t && systemctl reload nginx;
+#   4. start KAYAN with TRUST_PROXY=loopback (same machine) and add the
+#      public origin to CORS_ORIGINS when NODE_ENV=production.
+#
+# The three `proxy_set_header` lines are the point of the file: without them
+# nginx forwards a request that looks like it came from 127.0.0.1 over http,
+# and the server then counts every visitor as one person for the sign-in
+# limit and builds links on the internal address.
+
+upstream kayan_api {
+    server 127.0.0.1:3000;
+    keepalive 16;
+}
+
+# http:// - only ever to move people up, except for the certificate check,
+# which has to be answerable in the clear.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name kayan.example.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+    location / {
+        return 308 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name kayan.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/kayan.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/kayan.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    # A backup file is the largest thing that goes through here in both
+    # directions: an upload of a company archive is a normal act, and it must
+    # not die at nginx's 1 MiB default.
+    client_max_body_size 512m;
+
+    # A restore rehearses in a scratch database before it touches anything;
+    # that is minutes on a big company, and an nginx that gives up at 60 s
+    # leaves the person looking at a failed button and a half-finished job.
+    proxy_read_timeout 900s;
+    proxy_send_timeout 900s;
+
+    location / {
+        proxy_pass http://kayan_api;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        # The one place a download goes through a redirect of its own: leave the
+        # streamed answer alone rather than buffering a whole archive in nginx.
+        proxy_buffering off;
+        proxy_request_buffering off;
+    }
+}

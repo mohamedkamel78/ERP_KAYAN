@@ -115,7 +115,7 @@ function writeJobSummary() {
     const passed = results.filter((r) => r.ok).length;
     const failures = results.filter((r) => !r.ok);
     const seen = consoleLines
-      .filter((line) => /^(NAV|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|pageerror|console)/.test(line))
+      .filter((line) => /^(NAV|HTTP|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|DOWNLOAD|pageerror|console)/.test(line))
       .slice(-18);
     const block = [
       SUMMARY_MARKER,
@@ -264,6 +264,32 @@ async function main() {
         post: request.postData(),
       }),
     );
+
+    // Every request the program made that came back refused, with the route
+    // that refused it. A button that downloads nothing and a page that shows
+    // nothing have the same shape from the outside; what tells them apart is
+    // the address that came back 401, and whether it carried the credential
+    // it was supposed to. These lines are printed into the log and carried
+    // into the detail of the check that failed, so the annotation of a
+    // failing run names the route rather than the symptom.
+    const refused = [];
+    page.on('response', (response) => {
+      const status = response.status();
+      if (status < 400) return;
+      const url = response.url();
+      if (!/\/api\//.test(url)) return;
+      const path = url.replace(/^https?:\/\/[^/]+/, '');
+      const line = `HTTP ${status} ${response.request().method()} ${path}`;
+      if (!refused.includes(line)) refused.push(line);
+      log(line);
+    });
+
+    /// The refusals worth quoting in a check's detail: the ones seen so far,
+    /// oldest first, and never the whole list.
+    const refusedNote = () =>
+      refused.length === 0
+        ? 'no request was refused'
+        : `refused: ${refused.slice(-3).join(' , ')}`;
 
     // Anything the server could not do. A 500 the server logged is worth
     // more than a click that found nothing, so each one is printed with the
@@ -687,7 +713,8 @@ async function main() {
     check(
       'an export button downloads a spreadsheet file',
       clickedExcel && arrived.length > 0,
-      arrived.map((item) => item.suggested).join(', ') || 'no download arrived',
+      arrived.map((item) => item.suggested).join(', ') ||
+        `no download arrived - ${refusedNote()}`,
     );
     if (arrived.length) {
       const bytes = bytesOf(arrived[arrived.length - 1]);
@@ -708,7 +735,7 @@ async function main() {
     check(
       'the print button reaches a print page',
       clickedPrint && /\/print/.test(printUrl),
-      printUrl,
+      `${printUrl} - ${refusedNote()}`,
     );
     if (pages.length > beforeTabs) {
       await printPage
@@ -733,7 +760,8 @@ async function main() {
     check(
       'the template button downloads a file',
       clickedTemplate && templateArrived.length > 0,
-      templateArrived.map((item) => item.suggested).join(', ') || 'no download arrived',
+      templateArrived.map((item) => item.suggested).join(', ') ||
+        `no download arrived - ${refusedNote()}`,
     );
 
     // Choosing a file: the real system dialogue is driven through CDP.
@@ -832,7 +860,7 @@ async function main() {
     check(
       'the page raised no uncaught errors of its own',
       consoleErrors.filter((line) => !/favicon|fonts\.g/i.test(line)).length === 0,
-      consoleErrors.slice(0, 3).join(' / ') || 'none',
+      `${consoleErrors.slice(0, 3).join(' / ') || 'none'}${refused.length ? ` | ${refusedNote()}` : ''}`,
     );
     check(
       'the server answered every request the program made',

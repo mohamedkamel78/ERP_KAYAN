@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NextFunction, Request, Response } from 'express';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import {
@@ -11,6 +11,17 @@ import {
   configuredOrigins as corsConfiguredOrigins,
 } from './common/config/cors';
 import { secretsProblem as jwtSecretsProblem } from './common/config/jwt-secrets';
+import {
+  clientSecurityHeaders,
+  describeAccess,
+  hstsEnabled,
+  hstsMaxAgeSeconds,
+  httpsRedirectRequired,
+  httpsRedirectTarget,
+  lanAddresses,
+  proxyTrust,
+  proxyTrustWarning,
+} from './common/config/network';
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
 
 async function bootstrap() {
@@ -76,6 +87,53 @@ async function bootstrap() {
     credentials: true,
   });
 
+  // Who is calling, and over what.
+  //
+  // Behind a TLS-terminating proxy - the only sane way to let someone outside
+  // the building in - every request arrives from the proxy's address over the
+  // proxy's port. Left as it is, the rate limiter counts the whole office as
+  // one person, `req.secure` is false while the browser is on HTTPS, and the
+  // host a redirect is built from is the internal one. Express reads the
+  // forwarded headers for all three, but only when it is told which proxies to
+  // believe: `TRUST_PROXY=loopback` for a proxy on this machine, `true` when
+  // nothing else can reach this port, or a count of the proxies in front.
+  const proxy = proxyTrust();
+  const proxyWarning = proxyTrustWarning();
+  if (proxyWarning) logger.warn(proxyWarning);
+  if (proxy !== false) {
+    app.set('trust proxy', proxy);
+  }
+
+  // The headers every answer carries, and the one redirect an HTTPS-only
+  // deployment asks for. Written here rather than in a package because the
+  // whole list is four lines and a package would add a dependency that has to
+  // be watched for the same four lines.
+  const requireHttps = httpsRedirectRequired();
+  const sendHsts = hstsEnabled();
+  const hstsMaxAge = hstsMaxAgeSeconds();
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    const secure = request.secure === true || request.protocol === 'https';
+    for (const [name, value] of Object.entries(
+      clientSecurityHeaders({ secure, hsts: sendHsts, hstsMaxAgeSeconds: hstsMaxAge }),
+    )) {
+      response.setHeader(name, value);
+    }
+    const away = httpsRedirectTarget({
+      required: requireHttps,
+      secure,
+      host: request.headers.host,
+      url: request.originalUrl ?? request.url,
+    });
+    if (away) {
+      // 308 rather than 301 or 302: it keeps the method and the body, so a
+      // signed POST that is sent to the wrong port is not quietly turned into
+      // a GET that says nothing useful when it fails.
+      response.redirect(308, away);
+      return;
+    }
+    next();
+  });
+
   // If a built copy of the web client sits next to the API, serve it from the
   // same address. One origin means no CORS, no second port to remember, and the
   // browser address is the address of the program itself.
@@ -123,16 +181,14 @@ async function bootstrap() {
   const host = process.env.HOST ?? '0.0.0.0';
   await app.listen(port, host);
   logger.log(`API listening on http://${host}:${port}/api/v1`);
-  logger.log(`Local web access: http://localhost:${port}`);
-  if (host === '0.0.0.0') {
-    const interfaces = networkInterfaces();
-    for (const name of Object.keys(interfaces)) {
-      for (const net of interfaces[name] ?? []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          logger.log(`Network LAN access (${name}): http://${net.address}:${port}`);
-        }
-      }
-    }
+  for (const line of describeAccess({
+    port,
+    host,
+    lan: lanAddresses(),
+    proxy,
+    requireHttps,
+  })) {
+    logger.log(line);
   }
   // A line the desktop shell can wait for, in addition to the health route.
   logger.log(`KAYAN-API-READY port=${port} host=${host}`);
