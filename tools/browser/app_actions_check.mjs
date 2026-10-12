@@ -115,7 +115,7 @@ function writeJobSummary() {
     const passed = results.filter((r) => r.ok).length;
     const failures = results.filter((r) => !r.ok);
     const seen = consoleLines
-      .filter((line) => /^(NAV|HTTP|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|DOWNLOAD|pageerror|console)/.test(line))
+      .filter((line) => /^(NAV|HTTP|FILE|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|DOWNLOAD|pageerror|console)/.test(line))
       .slice(-18);
     const block = [
       SUMMARY_MARKER,
@@ -283,6 +283,42 @@ async function main() {
       if (!refused.includes(line)) refused.push(line);
       log(line);
     });
+
+    // A file the program handed over, as the browser itself saw it.
+    //
+    // The download events are the nicer evidence — a name, a finished
+    // transfer, bytes on a disk — but the app saves a fetched file from an
+    // object URL inside the click, and whether that shows up as a download
+    // depends on the browser build as much as on the program. So the answer
+    // the browser got for the file route is recorded here too: 200, an
+    // attachment header and a body with real length is the promise kept,
+    // whichever way it reached the person's Downloads folder.
+    const fileAnswers = [];
+    page.on('response', async (response) => {
+      const url = response.url();
+      if (!/\/api\/v1\/.*\/(download|pdf|print|templates\/)/.test(url)) return;
+      const headers = response.headers();
+      const answer = {
+        url,
+        path: url.replace(/^https?:\/\/[^/]+/, ''),
+        status: response.status(),
+        size: Number(headers['content-length'] ?? 0),
+        attachment: (headers['content-disposition'] ?? '').includes('attachment'),
+        type: headers['content-type'] ?? '',
+      };
+      fileAnswers.push(answer);
+      log(
+        `FILE ${answer.status} ${answer.path.split('?')[0]} ` +
+          `${answer.size}B${answer.attachment ? ' attachment' : ''}`,
+      );
+    });
+
+    /** The most recent successful answer for a route matching [needle]. */
+    const fileAnswerFor = (needle, since) =>
+      fileAnswers
+        .slice(since)
+        .reverse()
+        .find((answer) => answer.status === 200 && needle.test(answer.path)) ?? null;
 
     /// The refusals worth quoting in a check's detail: the ones seen so far,
     /// oldest first, and never the whole list.
@@ -695,6 +731,7 @@ async function main() {
 
     // ───────────────────────────────────────────── 2. export download
     const before = downloads.length;
+    const beforeExcelAnswer = fileAnswers.length;
     const wentToReports = await clickNamed(['التقارير', 'Reports'], { step: 'nav-reports' });
     await wait(5000);
     await shot('04-reports');
@@ -710,11 +747,15 @@ async function main() {
 
     const clickedExcel = await clickNamed(['إكسل', 'Excel'], { step: 'export-excel' });
     const arrived = await waitForDownload(before);
+    if (arrived.length === 0) await describe('export-excel');
+    const excelAnswer = fileAnswerFor(/exports\/.*\/download/, beforeExcelAnswer);
     check(
       'an export button downloads a spreadsheet file',
-      clickedExcel && arrived.length > 0,
+      clickedExcel && (arrived.length > 0 || (excelAnswer?.size ?? 0) > 500),
       arrived.map((item) => item.suggested).join(', ') ||
-        `no download arrived - ${refusedNote()}`,
+        (excelAnswer
+          ? `the browser was handed ${excelAnswer.size} bytes of ${excelAnswer.type}`
+          : `nothing arrived - ${refusedNote()}`),
     );
     if (arrived.length) {
       const bytes = bytesOf(arrived[arrived.length - 1]);
@@ -727,15 +768,23 @@ async function main() {
 
     // ───────────────────────────────────────────── 3. print page
     const beforeTabs = (await browser.pages()).length;
+    const beforePrintAnswer = fileAnswers.length;
     const clickedPrint = await clickNamed(['طباعة', 'Print'], { step: 'print' });
     await wait(6000);
+    await describe('print');
     const pages = await browser.pages();
     const printPage = pages[pages.length - 1];
     const printUrl = pages.length > beforeTabs ? printPage.url() : page.url();
+    const printAnswer = fileAnswerFor(/\/print/, beforePrintAnswer);
     check(
       'the print button reaches a print page',
-      clickedPrint && /\/print/.test(printUrl),
-      `${printUrl} - ${refusedNote()}`,
+      clickedPrint && (/\/print/.test(printUrl) || printAnswer !== null),
+      /\/print/.test(printUrl)
+        ? printUrl
+        : printAnswer
+          ? `the page was answered (${printAnswer.status}, ${printAnswer.size}B) ` +
+            `while the tab stayed at ${printUrl}`
+          : `${printUrl} - ${refusedNote()}`,
     );
     if (pages.length > beforeTabs) {
       await printPage
@@ -747,6 +796,7 @@ async function main() {
 
     // ───────────────────────────────── 4. import template + file choose
     const beforeTemplate = downloads.length;
+    const beforeTemplateAnswer = fileAnswers.length;
     const wentToImport = await clickNamed(['رفع بيانات', 'Import'], { step: 'nav-import' });
     await wait(5000);
     await shot('06-import');
@@ -757,11 +807,16 @@ async function main() {
       step: 'import-template',
     });
     const templateArrived = await waitForDownload(beforeTemplate);
+    if (templateArrived.length === 0) await describe('import-template');
+    const templateAnswer = fileAnswerFor(/import\/templates\//, beforeTemplateAnswer);
     check(
       'the template button downloads a file',
-      clickedTemplate && templateArrived.length > 0,
+      clickedTemplate &&
+        (templateArrived.length > 0 || (templateAnswer?.size ?? 0) > 500),
       templateArrived.map((item) => item.suggested).join(', ') ||
-        `no download arrived - ${refusedNote()}`,
+        (templateAnswer
+          ? `the browser was handed ${templateAnswer.size} bytes of ${templateAnswer.type}`
+          : `nothing arrived - ${refusedNote()}`),
     );
 
     // Choosing a file: the real system dialogue is driven through CDP.
@@ -817,6 +872,7 @@ async function main() {
     // ───────────────────────────────────────────── 5. full backup
     const beforeBackup = network.length;
     const beforeDump = downloads.length;
+    const beforeDumpAnswer = fileAnswers.length;
     const wentToBackup = await clickNamed(['النسخ الاحتياطي', 'Backup'], { step: 'nav-backup' });
     await wait(5000);
     await shot('08-backup');
@@ -840,10 +896,15 @@ async function main() {
 
     const clickedDump = await clickNamed(['تنزيل', 'Download'], { step: 'download-backup' });
     const dumpArrived = await waitForDownload(beforeDump);
+    if (dumpArrived.length === 0) await describe('download-backup');
+    const dumpAnswer = fileAnswerFor(/backup\/full\/.*\/download/, beforeDumpAnswer);
     check(
       'the backup file downloads',
-      clickedDump && dumpArrived.length > 0,
-      dumpArrived.map((item) => item.suggested).join(', ') || 'no download arrived',
+      clickedDump && (dumpArrived.length > 0 || (dumpAnswer?.size ?? 0) > 500),
+      dumpArrived.map((item) => item.suggested).join(', ') ||
+        (dumpAnswer
+          ? `the browser was handed ${dumpAnswer.size} bytes`
+          : `no download arrived - ${refusedNote()}`),
     );
     if (dumpArrived.length) {
       const bytes = bytesOf(dumpArrived[dumpArrived.length - 1]);

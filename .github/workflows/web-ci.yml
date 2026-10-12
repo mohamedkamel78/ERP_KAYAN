@@ -78,6 +78,11 @@ jobs:
           status=$?
           set -e
           cat /tmp/analyze.txt
+          # The number, published even when the answer is "all of them": a
+          # report that says sixty checks passed should be readable as sixty.
+          grep -E "checks passed" /tmp/apicheck.txt | tail -1 | sed -e 's/%/%25/g' -e 's/#/%23/g' | while IFS= read -r line; do
+            echo "::notice::$line"
+          done
           if [ "$status" -ne 0 ]; then
             {
               echo '### flutter analyze'
@@ -230,6 +235,9 @@ jobs:
           status=$?
           cat /tmp/browser.txt
           set -e
+          grep -E "checks passed" /tmp/browser.txt | tail -1 | sed -e 's/%/%25/g' -e 's/#/%23/g' | while IFS= read -r line; do
+            echo "::notice::browser check: $line"
+          done
           # The tool writes what it saw into OUT_DIR either way; keep the
           # transcript with it, so the artifact explains itself.
           cp /tmp/browser.txt "${{ github.workspace }}/e2e-out/browser-check.log" 2>/dev/null || true
@@ -249,7 +257,7 @@ jobs:
             # the verdict, is the shape that survives.
             verdict=$(
               {
-                grep -E "^(FAIL|NAV|HTTP|SERVER|LABELS missed|the browser check)" /tmp/browser.txt | tail -14
+                grep -E "^(FAIL|NAV|FILE|HTTP|SERVER|SCREEN|LABELS missed|the browser check)" /tmp/browser.txt | tail -16
                 grep -E "checks passed" /tmp/browser.txt | tail -1
                 # A 500 the server logged is worth more than any guess about
                 # one: the stack that followed it says which line failed.
