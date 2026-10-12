@@ -81,13 +81,10 @@ async function ensureRole(admin, target) {
     );
     return 'created';
   }
-  // The password in the configuration is the one that must work: on a fresh
-  // install the role may exist with an empty password, and on a machine where
-  // the file was edited it may be out of date.
-  await admin.$executeRawUnsafe(
-    `ALTER ROLE ${quote(target.user)} WITH LOGIN CREATEDB PASSWORD ${literal(target.password)}`,
-  );
-  return 'updated';
+  // Never change an existing role password during application startup.
+  // Re-installs and upgrades must preserve credentials. If the configured
+  // password is stale, the explicit authentication check below fails safely.
+  return 'present';
 }
 
 async function ensureDatabase(admin, target) {
@@ -249,6 +246,15 @@ async function main() {
       );
       process.exit(1);
     }
+  }
+
+  if (adminSucceeded && !(await canAuthenticate(appUrl))) {
+    console.error(
+      '  database: the existing erp_app credentials do not authenticate. ' +
+      'No existing role password or database was changed. Restore the valid ' +
+      'protected KAYAN configuration before retrying.',
+    );
+    process.exit(1);
   }
 
   const code = await migrate();
