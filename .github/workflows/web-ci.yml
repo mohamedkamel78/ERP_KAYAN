@@ -203,6 +203,13 @@ jobs:
           DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
           KAYAN_WEB_ROOT: ${{ github.workspace }}/web
           KAYAN_BACKUP_DIR: /tmp/kayan-backups
+          # Without these the program cannot sign a token, and the very
+          # first thing the browser asks it to do is sign one. They are
+          # throwaway values for a throwaway database.
+          JWT_ACCESS_SECRET: ci-browser-check-access-secret
+          JWT_REFRESH_SECRET: ci-browser-check-refresh-secret
+          JWT_ACCESS_TTL: "900"
+          JWT_REFRESH_TTL: "604800"
         run: |
           cd backend
           nohup node dist/src/main.js > /tmp/kayan-server.log 2>&1 &
@@ -227,6 +234,10 @@ jobs:
           # transcript with it, so the artifact explains itself.
           cp /tmp/browser.txt "${{ github.workspace }}/e2e-out/browser-check.log" 2>/dev/null || true
           if [ "$status" -ne 0 ]; then
+            # A 500 the server logged is worth more than any guess about
+            # one, so the tail of its log goes up with the rest.
+            grep -E "ERROR|Error:" /tmp/kayan-server.log | tail -8 \
+              | while IFS= read -r line; do echo "::error::server: $line"; done
             # The tool prefixes what it saw - LABELS, INPUTS, SCREEN,
             # LOGIN - so a failure says what the page really offered
             # instead of only that a click missed.
@@ -236,6 +247,11 @@ jobs:
               done
             exit "$status"
           fi
+
+      - name: Keep the server's own log
+        if: always()
+        run: |
+          cp /tmp/kayan-server.log "${{ github.workspace }}/e2e-out/server.log" 2>/dev/null || true
 
       - name: Keep what the browser saw
         if: always()

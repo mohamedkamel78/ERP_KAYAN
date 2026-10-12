@@ -6,6 +6,7 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { secretsProblem as jwtSecretsProblem } from './common/config/jwt-secrets';
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
 
 async function bootstrap() {
@@ -13,6 +14,24 @@ async function bootstrap() {
     bufferLogs: true,
   });
   const logger = new Logger('Bootstrap');
+
+  // Signing keys first. Without them the program can serve its own login
+  // screen and then fail on the first sign-in with a message that names
+  // nothing, so the check belongs here, at start-up, where it is read by the
+  // person who started it rather than by the person trying to sign in.
+  //
+  // On a real installation that is a reason not to start at all: a program
+  // that cannot issue a token is not a program anyone can use. While
+  // developing, it is only a warning, because a checkout with no .env is a
+  // normal thing to have.
+  const secretsProblem = jwtSecretsProblem();
+  if (secretsProblem) {
+    if (process.env.NODE_ENV === 'production') {
+      logger.error(secretsProblem);
+      throw new Error(secretsProblem);
+    }
+    logger.warn(secretsProblem);
+  }
 
   app.setGlobalPrefix('api/v1');
 

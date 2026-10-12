@@ -2,10 +2,12 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { accessSecret } from '../config/jwt-secrets';
 import { ALLOW_QUERY_TOKEN_KEY } from '../decorators/allow-query-token.decorator';
 import { DOWNLOAD_TICKET_TYPE } from '../download-ticket';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
@@ -72,7 +74,7 @@ export class JwtAuthGuard implements CanActivate {
         branchId: string | null;
         isSuperAdmin: boolean;
         permissions: string[];
-      }>(token, { secret: process.env.JWT_ACCESS_SECRET });
+      }>(token, { secret: accessSecret() });
 
       // A sign-in token is only ever accepted from the Authorization header.
       // In an address it would be written into browser history, proxy logs
@@ -105,6 +107,10 @@ export class JwtAuthGuard implements CanActivate {
       return true;
     } catch (error) {
       if (error instanceof UnauthorizedException) throw error;
+      // A copy that was never given a signing key cannot check anything, and
+      // saying so is the difference between a machine problem someone can
+      // fix and an "Invalid or expired token" that sends them in circles.
+      if (error instanceof ServiceUnavailableException) throw error;
       // Never echo the underlying JWT error: it leaks library internals.
       throw new UnauthorizedException('Invalid or expired token');
     }

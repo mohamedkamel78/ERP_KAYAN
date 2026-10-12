@@ -8,6 +8,11 @@ import * as argon2 from 'argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { AuditService } from '../../common/audit/audit.service';
 import {
+  accessSecret,
+  accessTtlSeconds,
+  refreshTtlSeconds,
+} from '../../common/config/jwt-secrets';
+import {
   DOWNLOAD_TICKET_TYPE,
   downloadTicketTtl,
 } from '../../common/download-ticket';
@@ -130,8 +135,8 @@ export class AuthService {
         permissions,
       },
       {
-        secret: process.env.JWT_ACCESS_SECRET,
-        expiresIn: Number(process.env.JWT_ACCESS_TTL ?? 900),
+        secret: accessSecret(),
+        expiresIn: accessTtlSeconds(),
       },
     );
 
@@ -185,7 +190,7 @@ export class AuthService {
         isSuperAdmin: user.isSuperAdmin,
         permissions: user.permissions,
       },
-      { secret: process.env.JWT_ACCESS_SECRET, expiresIn },
+      { secret: accessSecret(), expiresIn },
     );
     return { ticket, expiresIn };
   }
@@ -242,8 +247,8 @@ export class AuthService {
         permissions,
       },
       {
-        secret: process.env.JWT_ACCESS_SECRET,
-        expiresIn: Number(process.env.JWT_ACCESS_TTL ?? 900),
+        secret: accessSecret(),
+        expiresIn: accessTtlSeconds(),
       },
     );
 
@@ -276,7 +281,7 @@ export class AuthService {
 
   private async issueRefreshToken(userId: string): Promise<string> {
     const token = randomBytes(48).toString('base64url');
-    const ttl = Number(process.env.JWT_REFRESH_TTL ?? 604800);
+    const ttl = refreshTtlSeconds();
     await this.prisma.refreshToken.create({
       data: {
         userId,
