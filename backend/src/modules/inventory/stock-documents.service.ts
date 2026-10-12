@@ -8,6 +8,7 @@ import { InvoiceStatus, Prisma, StockDirection, StockDocumentKind } from '@prism
 import { AuditService } from '../../common/audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CompanySettingsService } from '../../common/settings/company-settings.module';
+import { WarehouseService } from '../../common/warehouse/warehouse.service';
 import { AccountMapService } from '../accounting/account-map.service';
 import { DocumentNumberService } from '../accounting/document-number.service';
 import { PostingService } from '../accounting/posting.service';
@@ -43,6 +44,7 @@ export class StockDocumentsService {
     private readonly accounts: AccountMapService,
     private readonly audit: AuditService,
     private readonly settings: CompanySettingsService,
+    private readonly warehouses: WarehouseService,
   ) {}
 
   async findAll(
@@ -132,6 +134,11 @@ export class StockDocumentsService {
       branchId?: string;
       fromBranchId?: string;
       toBranchId?: string;
+
+      /// A transfer may name the warehouse the goods leave and the one they
+      /// arrive at instead of two branches.
+      fromWarehouseId?: string;
+      toWarehouseId?: string;
       documentDate: string;
       reason?: string;
       notes?: string;
@@ -209,15 +216,32 @@ export class StockDocumentsService {
       });
     }
 
-    const fromBranchId =
-      kind === StockDocumentKind.TRANSFER ? dto.fromBranchId ?? null : null;
+    const fromWarehouseId = dto.fromWarehouseId ? String(dto.fromWarehouseId) : null;
+    const toWarehouseId = dto.toWarehouseId ? String(dto.toWarehouseId) : null;
+
+    // A transfer moves stock between two places. They may be two warehouses of
+    // the same branch, or two branches - and when two branches are named, the
+    // warehouses on each side are optional.
+    const movesBetweenBranches = Boolean(dto.fromBranchId) && String(dto.fromBranchId) !== targetBranch;
+    const movesBetweenWarehouses =
+      Boolean(fromWarehouseId) && Boolean(toWarehouseId) && fromWarehouseId !== toWarehouseId;
+
+    let fromBranchId =
+      kind === StockDocumentKind.TRANSFER ? (dto.fromBranchId ? String(dto.fromBranchId) : null) : null;
     if (kind === StockDocumentKind.TRANSFER) {
+      if (!fromBranchId && movesBetweenWarehouses) fromBranchId = targetBranch;
       if (!fromBranchId) {
         throw new BadRequestException('A transfer needs the branch the stock leaves');
       }
-      if (fromBranchId === targetBranch) {
-        throw new BadRequestException('A transfer needs two different branches');
+      if (fromBranchId === targetBranch && !movesBetweenWarehouses) {
+        throw new BadRequestException(
+          'A transfer needs two different branches, or two different warehouses of the same branch',
+        );
       }
+      if (movesBetweenWarehouses && fromWarehouseId === toWarehouseId) {
+        throw new BadRequestException('A transfer needs two different warehouses');
+      }
+      void movesBetweenBranches;
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -237,6 +261,8 @@ export class StockDocumentsService {
           documentDate: date,
           fromBranchId,
           toBranchId: kind === StockDocumentKind.TRANSFER ? targetBranch : null,
+          fromWarehouseId: kind === StockDocumentKind.TRANSFER ? fromWarehouseId : null,
+          toWarehouseId: kind === StockDocumentKind.TRANSFER ? toWarehouseId : toWarehouseId,
           reason: dto.reason?.trim() || null,
           notes: dto.notes?.trim() || null,
           status: InvoiceStatus.DRAFT,
@@ -294,6 +320,24 @@ export class StockDocumentsService {
         throw new BadRequestException('This document has just been posted by someone else.');
       }
 
+      // Where the goods are: named on the document, or the branch's default
+      // for a document that names none. Resolved here so a transfer between
+      // two piles cannot be half-recorded.
+      const toWarehouseId = await this.warehouses.resolve(
+        tx,
+        companyId,
+        document.branchId,
+        document.toWarehouseId,
+      );
+      const fromWarehouseId = document.fromBranchId
+        ? await this.warehouses.resolve(
+            tx,
+            companyId,
+            document.fromBranchId,
+            document.fromWarehouseId,
+          )
+        : toWarehouseId;
+
       const journalLines: Array<{
         accountId: string;
         debit?: Prisma.Decimal;
@@ -335,6 +379,7 @@ export class StockDocumentsService {
             referenceNumber: document.documentNumber,
             userId,
             requireStock: !settings.allowNegativeStock,
+            warehouseId: fromWarehouseId,
           });
           await this.move(tx, {
             companyId,
@@ -350,6 +395,7 @@ export class StockDocumentsService {
             referenceNumber: document.documentNumber,
             userId,
             requireStock: false,
+            warehouseId: toWarehouseId,
           });
           continue;
         }
@@ -399,6 +445,7 @@ export class StockDocumentsService {
           referenceNumber: document.documentNumber,
           userId,
           requireStock: direction === StockDirection.OUT && !settings.allowNegativeStock,
+          warehouseId: toWarehouseId,
         });
 
         valueChange = valueChange.plus(
@@ -503,13 +550,32 @@ export class StockDocumentsService {
         throw new BadRequestException('This document has just been changed by someone else.');
       }
 
-      for (const line of document.lines) {
-        const branches =
-          document.kind === StockDocumentKind.TRANSFER
-            ? [document.fromBranchId as string, document.branchId]
-            : [document.branchId];
+      const reversalToWarehouseId = await this.warehouses.resolve(
+        tx,
+        companyId,
+        document.branchId,
+        document.toWarehouseId,
+      );
+      const reversalFromWarehouseId = document.fromBranchId
+        ? await this.warehouses.resolve(
+            tx,
+            companyId,
+            document.fromBranchId,
+            document.fromWarehouseId,
+          )
+        : reversalToWarehouseId;
 
-        for (const [index, branchId] of branches.entries()) {
+      for (const line of document.lines) {
+        const targets =
+          document.kind === StockDocumentKind.TRANSFER
+            ? [
+                { branchId: document.fromBranchId as string, warehouseId: reversalFromWarehouseId },
+                { branchId: document.branchId, warehouseId: reversalToWarehouseId },
+              ]
+            : [{ branchId: document.branchId, warehouseId: reversalToWarehouseId }];
+
+        for (const [index, target] of targets.entries()) {
+          const branchId = target.branchId;
           if (line.quantity.isZero()) continue;
           // The original movement's direction, flipped.
           const wasOut =
@@ -530,6 +596,7 @@ export class StockDocumentsService {
             referenceNumber: document.documentNumber,
             userId,
             requireStock: false,
+            warehouseId: target.warehouseId,
           });
         }
       }
@@ -585,6 +652,9 @@ export class StockDocumentsService {
       referenceNumber: string;
       userId: string;
       requireStock: boolean;
+      /// Which pile the goods sat in, or moved to. Null only when the company
+      /// has no warehouse for the branch at all.
+      warehouseId?: string | null;
     },
   ) {
     const balance = await this.balance(tx, input.companyId, input.branchId, input.itemId);
@@ -601,6 +671,7 @@ export class StockDocumentsService {
       data: {
         companyId: input.companyId,
         branchId: input.branchId,
+        warehouseId: input.warehouseId ?? null,
         itemId: input.itemId,
         movementDate: input.date,
         direction: input.direction,

@@ -1301,4 +1301,85 @@ class AppLocalizationsAr extends AppLocalizations {
   @override
   String get resetPreviewFailed => 'تعذّر قراءة ما ستزيله إعادة الضبط.';
 
+
+  @override
+  String get cashAndBanks => 'الخزائن والبنوك';
+
+  @override
+  String get newCashAccount => 'خزنة أو حساب بنكي جديد';
+
+  @override
+  String get cashAccount => 'الخزنة أو البنك';
+
+  @override
+  String get cashBox => 'خزنة';
+
+  @override
+  String get bank => 'بنك';
+
+  @override
+  String get bankName => 'اسم البنك';
+
+  @override
+  String get iban => 'رقم الحساب الدولي';
+
+  @override
+  String get ledgerAccount => 'الحساب الدفتري';
+
+  @override
+  String get noCashAccounts => 'لا توجد خزائن أو بنوك بعد';
+
+  @override
+  String get statement => 'كشف حساب';
+
+  @override
+  String get vouchers => 'سندات القبض والصرف';
+
+  @override
+  String get newVoucher => 'سند قبض أو صرف جديد';
+
+  @override
+  String get receipt => 'سند قبض';
+
+  @override
+  String get payment => 'سند صرف';
+
+  @override
+  String get voucherType => 'النوع';
+
+  @override
+  String get voucherNumber => 'الرقم';
+
+  @override
+  String get amount => 'المبلغ';
+
+  @override
+  String get noVouchers => 'لا توجد سندات بعد';
+
+  @override
+  String get transfers => 'التحويلات';
+
+  @override
+  String get newTransfer => 'تحويل جديد';
+
+  @override
+  String get fromAccount => 'من';
+
+  @override
+  String get toAccount => 'إلى';
+
+  @override
+  String get noTransfers => 'لا توجد تحويلات بعد';
+
+  @override
+  String get transferNeedsTwoAccounts => 'يحتاج التحويل إلى خزنتين أو حسابين بنكيين';
+
+  @override
+  String get party => 'الطرف';
+
+  @override
+  String get saved => 'تم الحفظ';
+
+  @override
+  String get settleOldestFirst => 'تم تخصيص المبلغ على أقدم الفواتير المفتوحة';
 }

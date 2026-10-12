@@ -2614,6 +2614,168 @@ AppLocalizations lookupAppLocalizations(Locale locale) {
   /// **'What a reset would remove could not be read.'**
   String get resetPreviewFailed;
 
+  /// No description provided for @cashAndBanks.
+  ///
+  /// In ar, this message translates to:
+  /// **'الخزائن والبنوك'**
+  String get cashAndBanks;
+
+  /// No description provided for @newCashAccount.
+  ///
+  /// In ar, this message translates to:
+  /// **'خزنة أو حساب بنكي جديد'**
+  String get newCashAccount;
+
+  /// No description provided for @cashAccount.
+  ///
+  /// In ar, this message translates to:
+  /// **'الخزنة أو البنك'**
+  String get cashAccount;
+
+  /// No description provided for @cashBox.
+  ///
+  /// In ar, this message translates to:
+  /// **'خزنة'**
+  String get cashBox;
+
+  /// No description provided for @bank.
+  ///
+  /// In ar, this message translates to:
+  /// **'بنك'**
+  String get bank;
+
+  /// No description provided for @bankName.
+  ///
+  /// In ar, this message translates to:
+  /// **'اسم البنك'**
+  String get bankName;
+
+  /// No description provided for @iban.
+  ///
+  /// In ar, this message translates to:
+  /// **'رقم الحساب الدولي'**
+  String get iban;
+
+  /// No description provided for @ledgerAccount.
+  ///
+  /// In ar, this message translates to:
+  /// **'الحساب الدفتري'**
+  String get ledgerAccount;
+
+  /// No description provided for @noCashAccounts.
+  ///
+  /// In ar, this message translates to:
+  /// **'لا توجد خزائن أو بنوك بعد'**
+  String get noCashAccounts;
+
+  /// No description provided for @statement.
+  ///
+  /// In ar, this message translates to:
+  /// **'كشف حساب'**
+  String get statement;
+
+  /// No description provided for @vouchers.
+  ///
+  /// In ar, this message translates to:
+  /// **'سندات القبض والصرف'**
+  String get vouchers;
+
+  /// No description provided for @newVoucher.
+  ///
+  /// In ar, this message translates to:
+  /// **'سند قبض أو صرف جديد'**
+  String get newVoucher;
+
+  /// No description provided for @receipt.
+  ///
+  /// In ar, this message translates to:
+  /// **'سند قبض'**
+  String get receipt;
+
+  /// No description provided for @payment.
+  ///
+  /// In ar, this message translates to:
+  /// **'سند صرف'**
+  String get payment;
+
+  /// No description provided for @voucherType.
+  ///
+  /// In ar, this message translates to:
+  /// **'النوع'**
+  String get voucherType;
+
+  /// No description provided for @voucherNumber.
+  ///
+  /// In ar, this message translates to:
+  /// **'الرقم'**
+  String get voucherNumber;
+
+  /// No description provided for @amount.
+  ///
+  /// In ar, this message translates to:
+  /// **'المبلغ'**
+  String get amount;
+
+  /// No description provided for @noVouchers.
+  ///
+  /// In ar, this message translates to:
+  /// **'لا توجد سندات بعد'**
+  String get noVouchers;
+
+  /// No description provided for @transfers.
+  ///
+  /// In ar, this message translates to:
+  /// **'التحويلات'**
+  String get transfers;
+
+  /// No description provided for @newTransfer.
+  ///
+  /// In ar, this message translates to:
+  /// **'تحويل جديد'**
+  String get newTransfer;
+
+  /// No description provided for @fromAccount.
+  ///
+  /// In ar, this message translates to:
+  /// **'من'**
+  String get fromAccount;
+
+  /// No description provided for @toAccount.
+  ///
+  /// In ar, this message translates to:
+  /// **'إلى'**
+  String get toAccount;
+
+  /// No description provided for @noTransfers.
+  ///
+  /// In ar, this message translates to:
+  /// **'لا توجد تحويلات بعد'**
+  String get noTransfers;
+
+  /// No description provided for @transferNeedsTwoAccounts.
+  ///
+  /// In ar, this message translates to:
+  /// **'يحتاج التحويل إلى خزنتين أو حسابين بنكيين'**
+  String get transferNeedsTwoAccounts;
+
+  /// No description provided for @party.
+  ///
+  /// In ar, this message translates to:
+  /// **'الطرف'**
+  String get party;
+
+  /// No description provided for @saved.
+  ///
+  /// In ar, this message translates to:
+  /// **'تم الحفظ'**
+  String get saved;
+
+  /// No description provided for @settleOldestFirst.
+  ///
+  /// In ar, this message translates to:
+  /// **'تم تخصيص المبلغ على أقدم الفواتير المفتوحة'**
+  String get settleOldestFirst;
+
   // Lookup logic when only language code is specified.
   switch (locale.languageCode) {
     case 'ar':

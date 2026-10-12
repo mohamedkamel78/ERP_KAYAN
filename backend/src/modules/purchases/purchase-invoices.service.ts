@@ -7,6 +7,8 @@ import { InvoiceStatus, JournalStatus, Prisma, StockDirection } from '@prisma/cl
 import { AuditService } from '../../common/audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CompanySettingsService } from '../../common/settings/company-settings.module';
+import { WarehouseService } from '../../common/warehouse/warehouse.service';
+import { PriceListsService } from '../sales/price-lists.service';
 import { AccountMapService } from '../accounting/account-map.service';
 import { DocumentNumberService } from '../accounting/document-number.service';
 import { PostingService } from '../accounting/posting.service';
@@ -38,6 +40,8 @@ export class PurchaseInvoicesService {
     private readonly posting: PostingService,
     private readonly accounts: AccountMapService,
     private readonly settings: CompanySettingsService,
+    private readonly warehouses: WarehouseService,
+    private readonly prices: PriceListsService,
     private readonly audit: AuditService,
   ) {}
 
@@ -130,7 +134,7 @@ export class PurchaseInvoicesService {
     if (!supplier) throw new BadRequestException('The supplier does not exist');
     if (!supplier.isActive) throw new BadRequestException('The supplier is inactive');
 
-    const lines = await this.prepareLines(companyId, dto.lines);
+    const lines = await this.prepareLines(companyId, dto.lines, dto.supplierId);
     const subTotal = lines.reduce((s, l) => s.plus(l.lineTotal), new Prisma.Decimal(0));
     const taxAmount = lines.reduce((s, l) => s.plus(l.taxAmount), new Prisma.Decimal(0));
     const totalAmount = subTotal.plus(taxAmount);
@@ -145,6 +149,7 @@ export class PurchaseInvoicesService {
 
       return tx.purchaseInvoice.create({
         data: {
+          warehouseId: dto.warehouseId ?? null,
           companyId,
           branchId,
           invoiceNumber,
@@ -225,6 +230,21 @@ export class PurchaseInvoicesService {
         'vatReceivable',
       ]);
 
+      // Which pile the goods arrived in; the branch's default when the
+      // document names none.
+      const warehouseId = await this.warehouses.resolve(
+        tx,
+        companyId,
+        invoice.branchId,
+        invoice.warehouseId,
+      );
+      if (!invoice.warehouseId && warehouseId) {
+        await tx.purchaseInvoice.update({
+          where: { id: invoice.id },
+          data: { warehouseId },
+        });
+      }
+
       for (const line of invoice.lines) {
         if (!line.itemId) {
           throw new BadRequestException(
@@ -251,6 +271,7 @@ export class PurchaseInvoicesService {
           data: {
             companyId,
             branchId: invoice.branchId,
+            warehouseId,
             itemId: item.id,
             movementDate: invoice.invoiceDate,
             direction: StockDirection.IN,
@@ -487,13 +508,22 @@ export class PurchaseInvoicesService {
   private async prepareLines(
     companyId: string,
     input: PurchaseInvoiceLineDto[],
+    supplierId?: string | null,
   ): Promise<PreparedLine[]> {
     const prepared: PreparedLine[] = [];
 
     for (const [index, raw] of input.entries()) {
       const item = await this.prisma.item.findFirst({
         where: { id: raw.itemId, companyId, deletedAt: null },
-        select: { code: true, nameEn: true, nameAr: true, taxRate: true, isActive: true },
+        select: {
+          code: true,
+          nameEn: true,
+          nameAr: true,
+          taxRate: true,
+          isActive: true,
+          purchasePrice: true,
+          unit: true,
+        },
       });
       if (!item) {
         throw new BadRequestException(`Line ${index + 1}: the item does not exist`);
@@ -503,7 +533,25 @@ export class PurchaseInvoicesService {
       }
 
       const quantity = this.positive(raw.quantity, `Line ${index + 1} quantity`);
-      const unitPrice = this.nonNegative(raw.unitPrice, `Line ${index + 1} unitPrice`);
+
+      // A price typed on the line is the cost. When nobody typed one, the
+      // supplier's agreed list speaks, and failing that the item's own
+      // purchase price - resolved once the item is known.
+      let unitPrice =
+        raw.unitPrice === undefined || raw.unitPrice === null || raw.unitPrice === ''
+          ? null
+          : this.nonNegative(raw.unitPrice, `Line ${index + 1} unitPrice`);
+      if (unitPrice === null) {
+        const listed = await this.prices.resolvePrice(this.prisma, companyId, {
+          partyId: supplierId ?? null,
+          partyKind: 'SUPPLIER',
+          itemId: raw.itemId,
+          unit: item.unit,
+          quantity,
+        });
+        unitPrice = listed?.price ?? item.purchasePrice;
+      }
+
       // Line, then item, then the company's own rate - an item with no rate
       // of its own follows the company rather than silently becoming exempt.
       const taxRate: Prisma.Decimal =

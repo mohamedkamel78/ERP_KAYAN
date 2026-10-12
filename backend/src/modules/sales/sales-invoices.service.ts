@@ -7,6 +7,8 @@ import { InvoiceStatus, JournalStatus, Prisma, StockDirection } from '@prisma/cl
 import { AuditService } from '../../common/audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CompanySettingsService } from '../../common/settings/company-settings.module';
+import { WarehouseService } from '../../common/warehouse/warehouse.service';
+import { PriceListsService } from './price-lists.service';
 import { AccountMapService } from '../accounting/account-map.service';
 import { DocumentNumberService } from '../accounting/document-number.service';
 import { PostingService } from '../accounting/posting.service';
@@ -38,6 +40,8 @@ export class SalesInvoicesService {
     private readonly posting: PostingService,
     private readonly accounts: AccountMapService,
     private readonly settings: CompanySettingsService,
+    private readonly warehouses: WarehouseService,
+    private readonly prices: PriceListsService,
     private readonly audit: AuditService,
   ) {}
 
@@ -139,7 +143,7 @@ export class SalesInvoicesService {
     if (!customer) throw new BadRequestException('The customer does not exist');
     if (!customer.isActive) throw new BadRequestException('The customer is inactive');
 
-    const lines = await this.prepareLines(companyId, dto.lines);
+    const lines = await this.prepareLines(companyId, dto.lines, dto.customerId);
     const totals = this.totalsOf(lines);
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -152,6 +156,7 @@ export class SalesInvoicesService {
 
       return tx.salesInvoice.create({
         data: {
+          warehouseId: dto.warehouseId ?? null,
           companyId,
           branchId,
           invoiceNumber,
@@ -246,6 +251,21 @@ export class SalesInvoicesService {
         'costOfGoodsSold',
       ]);
 
+      // Which pile the goods left. A document that names none uses the
+      // branch's default, which is what keeps the warehouse reports complete.
+      const warehouseId = await this.warehouses.resolve(
+        tx,
+        companyId,
+        invoice.branchId,
+        invoice.warehouseId,
+      );
+      if (!invoice.warehouseId && warehouseId) {
+        await tx.salesInvoice.update({
+          where: { id: invoice.id },
+          data: { warehouseId },
+        });
+      }
+
       // ---- stock issue, valued at the weighted average cost
       let costOfGoods = new Prisma.Decimal(0);
       const costByLine = new Map<string, { unitCost: Prisma.Decimal; costTotal: Prisma.Decimal }>();
@@ -294,6 +314,7 @@ export class SalesInvoicesService {
           data: {
             companyId,
             branchId: invoice.branchId,
+            warehouseId,
             itemId: item.id,
             movementDate: invoice.invoiceDate,
             direction: StockDirection.OUT,
@@ -543,6 +564,7 @@ export class SalesInvoicesService {
   private async prepareLines(
     companyId: string,
     input: SalesInvoiceLineDto[],
+    customerId?: string | null,
   ): Promise<PreparedLine[]> {
     const prepared: PreparedLine[] = [];
     // The company's own policy: the rate to apply when nobody said otherwise,
@@ -551,7 +573,14 @@ export class SalesInvoicesService {
 
     for (const [index, raw] of input.entries()) {
       const quantity = this.positive(raw.quantity, `Line ${index + 1} quantity`);
-      const unitPrice = this.nonNegative(raw.unitPrice, `Line ${index + 1} unitPrice`);
+
+      // A price typed on the line is what was charged. When nobody typed one,
+      // the customer's agreed list speaks, and failing that the item's own
+      // selling price - resolved below, once the item is known.
+      const typedPrice =
+        raw.unitPrice === undefined || raw.unitPrice === null || raw.unitPrice === ''
+          ? null
+          : this.nonNegative(raw.unitPrice, `Line ${index + 1} unitPrice`);
 
       // A line needs to identify itself: either an item, or free text for a
       // service that is not stocked.
@@ -559,12 +588,14 @@ export class SalesInvoicesService {
         code: string;
         nameEn: string;
         taxRate: Prisma.Decimal | null;
+        salePrice: Prisma.Decimal;
+        unit: string;
       } | null = null;
 
       if (raw.itemId) {
         item = await this.prisma.item.findFirst({
           where: { id: raw.itemId, companyId, deletedAt: null },
-          select: { code: true, nameEn: true, taxRate: true, isActive: true },
+          select: { code: true, nameEn: true, taxRate: true, isActive: true, salePrice: true, unit: true },
         });
         if (!item) throw new BadRequestException(`Line ${index + 1}: the item does not exist`);
         if (!(item as any).isActive) {
@@ -576,6 +607,29 @@ export class SalesInvoicesService {
       if (!description) {
         throw new BadRequestException(
           `Line ${index + 1}: give either an item or a description`,
+        );
+      }
+
+      // What this line costs, when the person did not say.
+      let unitPrice: Prisma.Decimal;
+      if (typedPrice !== null) {
+        unitPrice = typedPrice;
+      } else if (item) {
+        const listed = await this.prices.resolvePrice(this.prisma, companyId, {
+          partyId: customerId ?? null,
+          partyKind: 'CUSTOMER',
+          itemId: raw.itemId ?? null,
+          unit: item.unit,
+          quantity,
+        });
+        unitPrice = listed
+          ? listed.price
+              .mul(new Prisma.Decimal(1).minus(listed.discountPercent.div(100)))
+              .toDecimalPlaces(MONEY_SCALE)
+          : item.salePrice;
+      } else {
+        throw new BadRequestException(
+          `Line ${index + 1}: a price is required when the line names no item`,
         );
       }
 

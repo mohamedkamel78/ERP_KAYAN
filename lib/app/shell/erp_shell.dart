@@ -117,6 +117,7 @@ class _ErpShellState extends ConsumerState<ErpShell> {
     final l10n = context.l10n;
     return [
       _NavItem(AppRoutes.dashboard, Icons.dashboard_outlined, l10n.dashboard),
+      _NavItem(AppRoutes.cash, Icons.account_balance_wallet_outlined, l10n.cashAndBanks),
       _NavItem(
         AppRoutes.journalEntries,
         Icons.menu_book_outlined,

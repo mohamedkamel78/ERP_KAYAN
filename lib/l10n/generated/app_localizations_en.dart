@@ -1307,4 +1307,85 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get resetPreviewFailed => 'What a reset would remove could not be read.';
 
+
+  @override
+  String get cashAndBanks => 'Cash & banks';
+
+  @override
+  String get newCashAccount => 'New box or bank';
+
+  @override
+  String get cashAccount => 'Box or bank';
+
+  @override
+  String get cashBox => 'Cash box';
+
+  @override
+  String get bank => 'Bank';
+
+  @override
+  String get bankName => 'Bank name';
+
+  @override
+  String get iban => 'IBAN';
+
+  @override
+  String get ledgerAccount => 'Ledger account';
+
+  @override
+  String get noCashAccounts => 'No boxes or banks yet';
+
+  @override
+  String get statement => 'Statement';
+
+  @override
+  String get vouchers => 'Receipts & payments';
+
+  @override
+  String get newVoucher => 'New receipt or payment';
+
+  @override
+  String get receipt => 'Receipt';
+
+  @override
+  String get payment => 'Payment';
+
+  @override
+  String get voucherType => 'Type';
+
+  @override
+  String get voucherNumber => 'Number';
+
+  @override
+  String get amount => 'Amount';
+
+  @override
+  String get noVouchers => 'No receipts or payments yet';
+
+  @override
+  String get transfers => 'Transfers';
+
+  @override
+  String get newTransfer => 'New transfer';
+
+  @override
+  String get fromAccount => 'From';
+
+  @override
+  String get toAccount => 'To';
+
+  @override
+  String get noTransfers => 'No transfers yet';
+
+  @override
+  String get transferNeedsTwoAccounts => 'A transfer needs two boxes or banks';
+
+  @override
+  String get party => 'Party';
+
+  @override
+  String get saved => 'Saved';
+
+  @override
+  String get settleOldestFirst => 'Applied to the oldest open invoices';
 }

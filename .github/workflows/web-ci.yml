@@ -61,6 +61,13 @@ jobs:
       - name: Every Dart import points at a real file
         run: node tools/check-dart-imports.mjs
 
+      # The same idea for translations: a screen asking for a key that does not
+      # exist is a compile error the analyser reports only after the SDK is up,
+      # and an English file that has drifted from the Arabic one is not reported
+      # at all. This checks both, and the generated Dart, in a moment.
+      - name: Every translation used exists in both languages
+        run: node tools/check-l10n-keys.mjs
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -210,6 +217,22 @@ jobs:
           echo "scenario exit code: $status"
           exit $status
 
+      # Runs after the accounting scenario, against the same database, because
+      # it is written to be safe on a database that already has history in it.
+      # The scenario waits out the rate limit its predecessor trips on purpose.
+      - name: Run the warehouses, price lists and orders scenario
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
+          APP_URL: http://127.0.0.1:3000/api/v1
+        run: |
+          set +e
+          node scripts/scenario-warehouses-orders.mjs http://127.0.0.1:3000/api/v1 2>&1 | tee /tmp/scenario-warehouses.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "scenario exit code: $status"
+          exit $status
+
       - name: Keep the scenario log
         if: always()
         uses: actions/upload-artifact@v4
@@ -217,6 +240,7 @@ jobs:
           name: accounting-scenario-log
           path: |
             /tmp/scenario.log
+            /tmp/scenario-warehouses.log
             /tmp/kayan-scenario-server.log
           if-no-files-found: warn
           retention-days: 30

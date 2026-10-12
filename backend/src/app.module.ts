@@ -6,6 +6,7 @@ import { PrismaModule } from './common/prisma/prisma.module';
 import { CompanySettingsModule } from './common/settings/company-settings.module';
 import { AuditModule } from './common/audit/audit.module';
 import { MaintenanceModule } from './common/maintenance/maintenance.module';
+import { WarehouseModule } from './common/warehouse/warehouse.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
@@ -34,6 +35,8 @@ import { SalesModule } from './modules/sales/sales.module';
     PrismaModule,
     // Global: every posting path reads the company's policies from here.
     CompanySettingsModule,
+    // Global: every module that moves goods asks which warehouse it moved in.
+    WarehouseModule,
     AuditModule,
     MaintenanceModule,
     AuthModule,

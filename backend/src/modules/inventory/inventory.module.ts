@@ -11,6 +11,7 @@ import { StockController } from './stock.controller';
 import { StockDocumentsController } from './stock-documents.controller';
 import { StockDocumentsService } from './stock-documents.service';
 import { StockService } from './stock.service';
+import { WarehousesController } from './warehouses.controller';
 
 @Module({
   imports: [PrismaModule, AuditModule, AccountingModule],
@@ -19,6 +20,7 @@ import { StockService } from './stock.service';
     StockController,
     StockDocumentsController,
     InventoryReportsController,
+    WarehousesController,
   ],
   providers: [ItemsService, StockService, StockDocumentsService, InventoryReportsService],
   exports: [StockService, StockDocumentsService, InventoryReportsService],
