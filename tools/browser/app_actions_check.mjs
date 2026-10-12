@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 /**
- * Drives the real KAYAN ERP web app in a real browser and checks the four
- * things a person does with a file: download an export, print a report,
- * choose a spreadsheet to import, and take a full backup.
+ * Drives the real KAYAN ERP web app in a real browser and checks what a
+ * person does with it: sign in, download an export, print a report, choose a
+ * spreadsheet and import it, take a full backup and download it, restore the
+ * whole database from the screen, open the financial periods, cancel the
+ * administrator reset at both of its steps, and reach the same app from the
+ * machine's LAN address.
  *
  * What it asserts comes from the browser itself, not from pixels: the files
  * that arrive (CDP download events), the tabs that open (their URLs), and the
@@ -30,6 +33,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
+import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -308,6 +312,17 @@ async function main() {
       }
     });
 
+    // Every answer from the program's API, with its method and status. The
+    // later steps judge a button by what the server answered, not by the
+    // screen alone: a restore that the screen calls done but the server
+    // refused is a failure.
+    const answers = [];
+    page.on('response', (response) => {
+      const url = response.url();
+      if (!/\/api\/v1\//.test(url)) return;
+      answers.push({ method: response.request().method(), url, status: response.status() });
+    });
+
     // What the server answered. The one response that matters most is the
     // sign-in: if the screen does not move, the reason is in that status
     // code and not in the clicking.
@@ -473,9 +488,19 @@ async function main() {
     async function clickNamed(names, { timeoutMs = 10000, step = 'click' } = {}) {
       const list = Array.isArray(names) ? names : [names];
       const deadline = Date.now() + timeoutMs;
+      let scrolls = 0;
       while (Date.now() < deadline) {
         const at = await findNode(list, []);
         if (at) {
+          // A control below the fold is not clickable where it stands. Scroll
+          // towards it a few times; after that, click where it is as before.
+          if (at.y > 860 && scrolls < 4) {
+            scrolls += 1;
+            await page.mouse.move(720, 450);
+            await page.mouse.wheel({ deltaY: Math.min(at.y - 450, 600) });
+            await wait(500);
+            continue;
+          }
           log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
           await page.mouse.click(at.x, at.y);
           return true;
@@ -489,6 +514,59 @@ async function main() {
 
     const clickField = (names, step) =>
       clickNamed(names, { timeoutMs: 10000, step });
+
+    /**
+     * Clicks the button of an open dialogue.
+     *
+     * A dialogue's button can share its words with a control the dialogue
+     * covers - the backup list's restore icon carries the same tooltip as
+     * the restore button inside the dialogue. The smallest match is the icon,
+     * so this takes the largest control instead: the dialogue's own button is
+     * wider than any icon behind it.
+     */
+    async function clickDialogButton(names, { timeoutMs = 10000, step = 'dialog' } = {}) {
+      const list = Array.isArray(names) ? names : [names];
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const found = (await findAllNodes(list, ['button'])).filter((node) => node.isControl);
+        if (found.length > 0) {
+          const at = found.reduce((best, node) => (node.area > best.area ? node : best));
+          log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)} (dialogue button)`);
+          await page.mouse.click(at.x, at.y);
+          return true;
+        }
+        await wait(250);
+      }
+      log(`LABELS missed: no dialogue button labelled ${list.join(' / ')} at step ${step}`);
+      await describe(step);
+      return false;
+    }
+
+    /** The text the page shows, with the spacing squeezed out. */
+    const screenText = () =>
+      page
+        .evaluate(() => (document.body.innerText || '').replace(/\s+/g, ' '))
+        .catch(() => '');
+
+    /**
+     * Types into the field that was put on top most recently - the one a
+     * dialogue has just opened. Same read-back rule as the sign-in fields.
+     */
+    async function typeIntoTopField(value) {
+      const inputs = await page.$$('input');
+      let top = null;
+      for (const input of inputs) {
+        const box = await input.evaluate((node) => {
+          if (node.hidden || node.type === 'hidden') return null;
+          const rect = node.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return null;
+          return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        });
+        if (box) top = box;
+      }
+      if (!top) return false;
+      return typeIntoField(top, value);
+    }
 
     async function waitForDownload(previousCount, timeoutMs = 30000) {
       const deadline = Date.now() + timeoutMs;
@@ -780,6 +858,32 @@ async function main() {
     }
     check('closing the file dialogue twice in a row is fine', cancelRecovered);
 
+    // ───────────────────────── 4b. the import is written, not only read
+    // The read showed what would change. This is the press that changes it:
+    // the server has to take the rows, and the screen has to say so.
+    const commitMark = answers.length;
+    const clickedCommit = await clickNamed(['نفّذ الاستيراد', 'Import for real'], {
+      timeoutMs: 8000,
+      step: 'import-commit',
+    });
+    let commitAnswers = [];
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      commitAnswers = answers
+        .slice(commitMark)
+        .filter((entry) => entry.method === 'POST' && /\/api\/v1\/import\//.test(entry.url));
+      if (commitAnswers.length) break;
+      await wait(500);
+    }
+    await wait(2000);
+    await shot('07b-import-done');
+    const importText = await screenText();
+    const committedOk = commitAnswers.some((entry) => entry.status >= 200 && entry.status < 300);
+    check(
+      'the import button writes the rows that were read',
+      clickedCommit && committedOk && /Imported|تم الاستيراد/.test(importText),
+      commitAnswers.map((entry) => `status ${entry.status}`).join(', ') || 'no write request was sent',
+    );
+
     // ───────────────────────────────────────────── 5. full backup
     const beforeBackup = network.length;
     const beforeDump = downloads.length;
@@ -818,6 +922,165 @@ async function main() {
         magic === 'PGDMP',
         `${bytes.length} bytes, magic=${JSON.stringify(magic)}`,
       );
+    }
+
+    // ───────────────── 5b. full restore from the screen. The CI database is
+    // disposable: the workflow builds it fresh and it never holds real data.
+    // The backup restored is the one this check just made, so what is
+    // asserted is the round trip: the server reads it back and says so.
+    const restoreMark = answers.length;
+    const openedRestore = await clickNamed(['استعادة قاعدة البيانات كاملة', 'Restore the whole database'], {
+      timeoutMs: 15000,
+      step: 'restore-open',
+    });
+    let restoreWarned = false;
+    let restoreTyped = false;
+    let restoreSent = false;
+    if (openedRestore) {
+      restoreWarned = await clickDialogButton(['تأكيد', 'Confirm'], { step: 'restore-warn' });
+      await wait(1500);
+      restoreTyped = await typeIntoTopField('RESTORE');
+      await wait(500);
+      restoreSent = await clickDialogButton(
+        ['استعادة قاعدة البيانات كاملة', 'Restore the whole database'],
+        { step: 'restore-run' },
+      );
+    }
+    let restoreAnswer = null;
+    for (let attempt = 0; attempt < 180 && restoreSent; attempt += 1) {
+      restoreAnswer = answers
+        .slice(restoreMark)
+        .find((entry) => entry.method === 'POST' && /\/backup\/full\/restore/.test(entry.url));
+      if (restoreAnswer) break;
+      await wait(1000);
+    }
+    await wait(4000);
+    await shot('07c-restore-done');
+    const restoreAnswered = Boolean(restoreAnswer && restoreAnswer.status >= 200 && restoreAnswer.status < 300);
+    check(
+      'a full restore from the screen is confirmed by the server',
+      openedRestore && restoreWarned && restoreTyped && restoreSent && restoreAnswered,
+      `warned=${restoreWarned} typed=${restoreTyped} sent=${restoreSent}` +
+        (restoreAnswer ? `, the server answered ${restoreAnswer.status}` : ', the server never answered'),
+    );
+    const afterRestore = answers
+      .slice(restoreMark)
+      .filter((entry) => entry.method === 'GET' && /\/backup\/full(\?|$)/.test(entry.url));
+    check(
+      'the program answers normally after the restore',
+      restoreAnswered && afterRestore.length > 0 && afterRestore.every((entry) => entry.status === 200),
+      afterRestore.map((entry) => `status ${entry.status}`).join(', ') || 'no list was requested after the restore',
+    );
+    check(
+      'the screen says the restore completed',
+      /Restore completed|تمت الاستعادة بنجاح/.test(await screenText()),
+    );
+
+    // ───────────────────── 6. financial periods, behind the sign-in
+    const periodsMark = answers.length;
+    const wentToPeriods = await clickNamed(['الفترات المالية', 'Fiscal periods'], { step: 'nav-periods' });
+    await wait(5000);
+    await shot('11-fiscal-periods');
+    const periodList = answers
+      .slice(periodsMark)
+      .filter((entry) => entry.method === 'GET' && /\/accounting\/fiscal-periods/.test(entry.url));
+    check('the financial periods entry opens', wentToPeriods, `at ${page.url()}`);
+    check(
+      'the financial periods list is fetched with the session and not refused',
+      periodList.length > 0 && periodList.every((entry) => entry.status === 200),
+      periodList.map((entry) => `status ${entry.status}`).join(', ') || 'no list was requested',
+    );
+
+    // ───────── 7. administrator reset: cancelling must delete nothing
+    // The destructive step itself runs only against the disposable database,
+    // in the API check, where the wrong password is tested as well. Here the
+    // browser proves that both ways out of the dialogue send the server no
+    // reset request at all.
+    const resetMark = network.length;
+    const wentToSettings = await clickNamed(['الإعدادات', 'Settings'], { step: 'nav-settings' });
+    await wait(4000);
+    const openedReset1 = await clickNamed(['إعادة ضبط بيانات البرنامج', 'Reset ERP Data'], {
+      timeoutMs: 15000,
+      step: 'reset-open-1',
+    });
+    await wait(2000);
+    await shot('12-reset-first-step');
+    const cancelled1 = await clickDialogButton(['إلغاء', 'Cancel'], { step: 'reset-cancel-1' });
+    await wait(1500);
+    const openedReset2 = await clickNamed(['إعادة ضبط بيانات البرنامج', 'Reset ERP Data'], {
+      timeoutMs: 15000,
+      step: 'reset-open-2',
+    });
+    await wait(2000);
+    const confirmed2 = await clickDialogButton(['تأكيد', 'Confirm'], { step: 'reset-confirm-2' });
+    await wait(2000);
+    const secondStepFields = await page.$$eval(
+      'input',
+      (nodes) =>
+        nodes.filter(
+          (node) => !node.hidden && node.type !== 'hidden' && node.getBoundingClientRect().width > 0,
+        ).length,
+    );
+    await shot('13-reset-second-step');
+    const cancelled2 = await clickDialogButton(['إلغاء', 'Cancel'], { step: 'reset-cancel-2' });
+    await wait(2000);
+    const resetRequests = network
+      .slice(resetMark)
+      .filter((request) => request.method === 'POST' && /\/admin\/reset/.test(request.url));
+    check(
+      'cancelling the reset at both steps sends the server no reset request',
+      Boolean(wentToSettings && openedReset1 && cancelled1 && openedReset2 && confirmed2 && cancelled2) &&
+        secondStepFields >= 2 &&
+        resetRequests.length === 0,
+      `second step showed ${secondStepFields} field(s); reset requests sent: ${resetRequests.length}`,
+    );
+
+    // ───── 8. the same program from the LAN address. A second device on the
+    // network reaches the server by its address, not by localhost. This
+    // runner can only stand in for that: a real second device is not part of
+    // this check.
+    const lanAddress =
+      Object.values(networkInterfaces())
+        .flat()
+        .find((item) => item && item.family === 'IPv4' && !item.internal)?.address ?? null;
+    check(
+      'the runner has a LAN address to be reached on',
+      Boolean(lanAddress),
+      lanAddress ?? 'no non-loopback IPv4 address on this machine',
+    );
+    if (lanAddress) {
+      const lanOrigin = `http://${lanAddress}:${new URL(APP_URL).port || 3000}`;
+      const lanPage = await browser.newPage();
+      try {
+        await lanPage.setViewport({ width: 1280, height: 800 });
+        await lanPage.goto(`${lanOrigin}/?a11y=1`, { waitUntil: 'networkidle2', timeout: 90000 });
+        await wait(6000);
+        const lanControls = await lanPage
+          .evaluate(() => document.querySelectorAll('flt-semantics, [role="button"]').length)
+          .catch(() => 0);
+        check(
+          'the web app loads from the LAN address',
+          lanControls > 3,
+          `${lanControls} control(s) published at ${lanOrigin}`,
+        );
+        const lanLogin = await lanPage
+          .evaluate(async (creds) => {
+            const response = await fetch(`${location.origin}/api/v1/auth/login`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(creds),
+            });
+            return { status: response.status, origin: location.origin };
+          }, { username: USERNAME, password: PASSWORD })
+          .catch((error) => ({ status: 0, origin: error.message }));
+        check(
+          'the API signs a user in when reached from the LAN address',
+          lanLogin.status === 200 || lanLogin.status === 201,
+          `status ${lanLogin.status} from ${lanLogin.origin}`,
+        );
+      } finally {
+        await lanPage.close().catch(() => {});
+      }
     }
 
     // ───────────────────────────────────────────────────────── summary

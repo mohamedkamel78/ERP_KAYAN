@@ -126,9 +126,11 @@ jobs:
   browser-checks:
     # The program's file promises, checked the way a person meets them: in a
     # real browser against the real server - download an export, open the
-    # print page, choose and cancel a file, take a full backup and download
-    # it. What is asserted comes from browser events (downloads, tabs,
-    # network), not from pixels.
+    # print page, choose and cancel a file, import a file, take a full backup
+    # and download it, restore it from the screen, open the financial
+    # periods, cancel the administrator reset, and reach the app from the
+    # LAN address. What is asserted comes from browser events (downloads,
+    # tabs, network, server answers), not from pixels.
     name: Browser checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -242,6 +244,30 @@ jobs:
               | grep -A 8 "Unhandled exception" | tail -20 \
               | paste -sd'|' | fold -w 2500 | head -2 \
               | while IFS= read -r line; do echo "::error title=server log::$line"; done
+            exit "$status"
+          fi
+
+      - name: API checks against the same server (the routes the screens use)
+        # Runs even when the browser check failed, so one failure does not
+        # hide the other. Its own failure still fails the job.
+        if: always()
+        env:
+          # Enables the destructive reset section. This database is built
+          # fresh for this run by prepare-database and is never production.
+          KAYAN_E2E_ALLOW_RESET: "1"
+        run: |
+          cd backend
+          set +e
+          node scripts/api-check.mjs http://127.0.0.1:3000/api/v1 > /tmp/api-check.txt 2>&1
+          status=$?
+          set -e
+          mkdir -p "${{ github.workspace }}/e2e-out"
+          cp /tmp/api-check.txt "${{ github.workspace }}/e2e-out/api-check.log"
+          cat /tmp/api-check.txt
+          if [ "$status" -ne 0 ]; then
+            grep -E "^FAIL" /tmp/api-check.txt | head -10 | while IFS= read -r line; do
+              echo "::error title=api check::$line"
+            done
             exit "$status"
           fi
 
