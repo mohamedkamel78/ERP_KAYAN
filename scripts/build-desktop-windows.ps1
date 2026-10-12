@@ -241,29 +241,37 @@ $portablePg = Join-Path $toolsFolder "pgsql\bin"
 # an unrelated PostgreSQL build can leave binaries compiled against an absolute
 # build-machine timezone path. That makes the installed database fail at startup.
 $pgVersion = "16.15"
-$archiveUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
-$archiveFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-binaries.zip"
+$installerUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64.exe"
+$installerFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-installer.exe"
 $extractRoot = Join-Path $env:TEMP "kayan-postgresql-runtime-$pgVersion"
-Write-Host "      downloading the official EDB PostgreSQL $pgVersion binary archive"
-if ((Test-Path $archiveFile) -and ((Get-Item $archiveFile).Length -lt 20000000)) { Remove-Item -Force $archiveFile }
-if (-not (Test-Path $archiveFile)) {
-  & curl.exe -fsSL --connect-timeout 20 --max-time 240 --retry 3 --retry-delay 2 --retry-all-errors -o $archiveFile $archiveUrl
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $archiveFile)) { Fail ("Could not download the official EDB PostgreSQL binary archive from " + $archiveUrl) }
+Write-Host "      downloading the official EDB PostgreSQL $pgVersion installer"
+if ((Test-Path $installerFile) -and ((Get-Item $installerFile).Length -lt 20000000)) { Remove-Item -Force $installerFile }
+if (-not (Test-Path $installerFile)) {
+  & curl.exe -fsSL --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors -o $installerFile $installerUrl
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installerFile)) { Fail ("Could not download the official EDB PostgreSQL installer from " + $installerUrl) }
 }
-if ((Get-Item $archiveFile).Length -lt 20000000) { Fail "The PostgreSQL binary archive is incomplete or unexpectedly small." }
-$archiveHeader = [System.IO.File]::ReadAllBytes($archiveFile)[0..3]
-if ($archiveHeader[0] -ne 0x50 -or $archiveHeader[1] -ne 0x4B) { Fail "The PostgreSQL archive is not a ZIP file; refusing to package it." }
+if ((Get-Item $installerFile).Length -lt 20000000) { Fail "The PostgreSQL installer download is incomplete or unexpectedly small." }
 if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
 New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-Expand-Archive -Path $archiveFile -DestinationPath $extractRoot -Force
-$initDbCandidate = Get-ChildItem -Path $extractRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+$extractLog = Join-Path $env:TEMP "kayan-postgresql-extract.log"
+Write-Host "      extracting EDB binaries with the documented --extract-only yes option"
+& $installerFile --mode unattended --unattendedmodeui none --extract-only yes --prefix "$extractRoot" --debugtrace "$extractLog"
+if ($LASTEXITCODE -ne 0) {
+  $detail = if (Test-Path $extractLog) { (Get-Content $extractLog -Tail 30) -join [Environment]::NewLine } else { "(no EDB installer trace was written)" }
+  Fail ("The official PostgreSQL installer failed to extract binaries:" + [Environment]::NewLine + $detail)
+}
+$initDbCandidate = Get-ChildItem -Path $extractRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue |
+  Where-Object { (Test-Path (Join-Path $_.Directory.FullName "postgres.exe")) -and (Test-Path (Join-Path $_.Directory.FullName "pg_dump.exe")) } |
+  Select-Object -First 1
 if (-not $initDbCandidate) {
-  $layout = (Get-ChildItem -Path $extractRoot -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 60 -ExpandProperty FullName) -join [Environment]::NewLine
-  Fail ("The official EDB archive extracted but contains no initdb.exe. Extracted files:" + [Environment]::NewLine + $layout)
+  $layout = if (Test-Path $extractRoot) {
+    (Get-ChildItem -Path $extractRoot -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 80 -ExpandProperty FullName) -join [Environment]::NewLine
+  } else { "(extract directory was not created)" }
+  $detail = if (Test-Path $extractLog) { (Get-Content $extractLog -Tail 30) -join [Environment]::NewLine } else { "(no EDB installer trace was written)" }
+  Fail ("EDB reported extraction success but no PostgreSQL server binaries were found. Extracted files:" + [Environment]::NewLine + $layout + [Environment]::NewLine + "Installer trace:" + [Environment]::NewLine + $detail)
 }
 $pgBin = $initDbCandidate.Directory.FullName
-if (-not (Test-Path (Join-Path $pgBin "pg_dump.exe")) -or -not (Test-Path (Join-Path $pgBin "postgres.exe"))) { Fail "EDB archive is missing required PostgreSQL tools." }
-if ((Get-PeMachine (Join-Path $pgBin "initdb.exe")) -ne 0x8664) { Fail "The downloaded PostgreSQL initdb is not a Windows x64 executable." }
+if ((Get-PeMachine (Join-Path $pgBin "initdb.exe")) -ne 0x8664) { Fail "The extracted PostgreSQL initdb is not a Windows x64 executable." }
 Write-Host ("      official EDB PostgreSQL binaries extracted from " + $pgBin)
 $pgFolder = Join-Path $backendFolder "pg"
 $pgRoot = Split-Path -Parent $pgBin
