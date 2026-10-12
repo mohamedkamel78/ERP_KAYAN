@@ -71,6 +71,22 @@ try {
   if ($api) { try { Wait-Process -Id $api.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { } }
   $api = $null
   Start-Sleep -Seconds 2
+
+  # A fresh install intentionally pauses at the first-administrator screen.
+  # Seed a CI-only administrator through the exact same preparation script so
+  # this test can verify automatic server startup without GUI coordinate hacks.
+  $previousAdminUser = $env:KAYAN_ADMIN_USERNAME
+  $previousAdminPassword = $env:KAYAN_ADMIN_PASSWORD
+  try {
+    $env:KAYAN_ADMIN_USERNAME = "ci-admin"
+    $env:KAYAN_ADMIN_PASSWORD = "CiSmoke-Admin-Password-7241"
+    $seed = Start-Process -FilePath $node -ArgumentList @("scripts\prepare-database.mjs") -WorkingDirectory $backend -Wait -PassThru -NoNewWindow
+    if ($seed.ExitCode -ne 0) { throw ("CI first-administrator seeding failed with exit code " + $seed.ExitCode) }
+  } finally {
+    if ($null -eq $previousAdminUser) { Remove-Item Env:KAYAN_ADMIN_USERNAME -ErrorAction SilentlyContinue } else { $env:KAYAN_ADMIN_USERNAME = $previousAdminUser }
+    if ($null -eq $previousAdminPassword) { Remove-Item Env:KAYAN_ADMIN_PASSWORD -ErrorAction SilentlyContinue } else { $env:KAYAN_ADMIN_PASSWORD = $previousAdminPassword }
+  }
+
   $clientPath = Join-Path $env:ProgramFiles "KAYAN ERP\erp_kayan.exe"
   if (-not (Test-Path $clientPath)) { throw ("The installed KAYAN client is missing: " + $clientPath) }
   $client = Start-Process -FilePath $clientPath -PassThru
