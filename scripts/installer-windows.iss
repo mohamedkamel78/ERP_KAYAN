@@ -40,7 +40,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=KAYAN-ERP-Setup-{#AppVersion}
+OutputBaseFilename=KAYAN-Setup
 ; The KAYAN logo (Kayan.png at the repository root, rendered by
 ; tools\generate_icons.py) is the icon of the Setup file itself — the first
 ; thing a customer sees. The path is relative to this script, so it works on
@@ -90,12 +90,12 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\icons\app_icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\backend\scripts\manage-kayan-db.ps1"" -Action install -Port 5433 -PgBinDir ""{app}\backend\pg"""; Flags: runhidden; StatusMsg: "Configuring dedicated database service (KAYAN_PostgreSQL)..."
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\backend\scripts\manage-kayan-db.ps1"" -Action install -Port 5433 -PgBinDir ""{app}\backend\pg"""; Flags: runhidden waituntilterminated; StatusMsg: "Configuring dedicated database service (KAYAN_PostgreSQL)..."
 Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""KAYAN ERP Server"" dir=in action=allow protocol=TCP localport=3000 profile=private,domain"; Flags: runhidden; StatusMsg: "Configuring Windows Firewall for local network access..."
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\backend\scripts\manage-kayan-db.ps1"" -Action uninstall"; Flags: runhidden
+; Preserve the database service and all company data on uninstall.
 Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""KAYAN ERP Server"""; Flags: runhidden
 
 [UninstallDelete]
