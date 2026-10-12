@@ -96,15 +96,23 @@ jobs:
         run: |
           cd backend/dist-demo
           file=$(ls kayan-demo-backup-*.dump | head -n 1)
+          json_file=$(ls kayan-company-backup-*.json | head -n 1)
           sha256sum "$file" | tee SHA256SUMS.txt
+          sha256sum "$json_file" | tee -a SHA256SUMS.txt
           {
-            echo "### Demo backup file"
+            echo "### Demo backup file (PostgreSQL DUMP)"
             echo
             echo "- file: \`$file\`"
             echo "- size: $(du -h "$file" | cut -f1)"
-            echo "- sha256: \`$(cut -d' ' -f1 < SHA256SUMS.txt)\`"
+            echo "- sha256: \`$(sha256sum "$file" | cut -d' ' -f1)\`"
             echo
-            echo "It was restored into a second throwaway database during this run and the books were checked after the restore."
+            echo "### Company JSON Backup file"
+            echo
+            echo "- file: \`$json_file\`"
+            echo "- size: $(du -h "$json_file" | cut -f1)"
+            echo "- sha256: \`$(sha256sum "$json_file" | cut -d' ' -f1)\`"
+            echo
+            echo "Both were restored into a second throwaway database during this run and the books were checked after each restore."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attach the demo backup to the run
@@ -114,6 +122,15 @@ jobs:
           path: |
             backend/dist-demo/*.dump
             backend/dist-demo/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach the company JSON backup to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: kayan-company-backup-json
+          path: |
+            backend/dist-demo/*.json
           if-no-files-found: error
           retention-days: 90
 

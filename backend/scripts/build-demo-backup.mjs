@@ -245,6 +245,7 @@ async function main() {
   const demoBase = `http://127.0.0.1:${demoPort}/api/v1`;
   const demo = startApi(demoPort, DEMO_URL, backupDir);
   let bytes = null;
+  let jsonBytes = null;
   let name = '';
   let before = null;
   let token = '';
@@ -323,6 +324,25 @@ async function main() {
         Number(before?.totals?.debit) === Number(before?.totals?.credit) &&
         (before?.rows?.length ?? 0) >= 20,
       `${before?.rows?.length ?? 0} accounts with movement, debits ${before?.totals?.debit} / credits ${before?.totals?.credit}, difference ${before?.totals?.difference}`,
+    );
+
+    // ── 5b. the company JSON backup file ─────────────────────────────────
+    const jsonDownload = await fetch(`${demoBase}/backup/download`, { headers });
+    jsonBytes = Buffer.from(await jsonDownload.arrayBuffer());
+    check(
+      'the company JSON backup is downloaded from /backup/download',
+      jsonDownload.status === 200 && jsonBytes.length > 0,
+      `${jsonBytes.length} bytes, HTTP ${jsonDownload.status}`,
+    );
+
+    const jsonParsed = JSON.parse(jsonBytes.toString('utf8'));
+    check(
+      'the company JSON backup is valid JSON and not a PostgreSQL DUMP',
+      jsonParsed.format === 'kayan-backup' &&
+        jsonParsed.version === 1 &&
+        !jsonBytes.subarray(0, 5).toString('latin1').startsWith('PGDMP') &&
+        Object.keys(jsonParsed.tables ?? {}).length > 10,
+      `format=${jsonParsed.format}, tables=${Object.keys(jsonParsed.tables ?? {}).length}`,
     );
   } finally {
     demo.child.kill('SIGTERM');
@@ -416,6 +436,38 @@ async function main() {
         after?.rows?.length === before?.rows?.length,
       `debits ${after?.totals?.debit} (backed up ${before?.totals?.debit}), difference ${after?.totals?.difference}`,
     );
+
+    // ── 6b. test restoring the company JSON backup via /backup/restore ───
+    const jsonForm = new FormData();
+    jsonForm.append('replace', 'true');
+    jsonForm.append(
+      'file',
+      new Blob([jsonBytes], { type: 'application/json' }),
+      'kayan-company-backup-demo.json',
+    );
+    const jsonRestoreRes = await fetch(`${restoreBase}/backup/restore?replace=true`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${signedIn}` },
+      body: jsonForm,
+    });
+    const jsonRestoreBody = await jsonRestoreRes.json().catch(() => null);
+    check(
+      'the company JSON backup restores cleanly through the company restore route',
+      (jsonRestoreRes.status === 200 || jsonRestoreRes.status === 201) &&
+        jsonRestoreBody?.companyId != null,
+      `HTTP ${jsonRestoreRes.status}, total written=${jsonRestoreBody?.total ?? 0}`,
+    );
+
+    const afterJson = await fetch(
+      `${restoreBase}/reports/trial-balance?from=2000-01-01&to=2099-12-31`,
+      { headers: { Authorization: `Bearer ${signedIn}` } },
+    ).then((response) => response.json());
+    check(
+      'the books balance after restoring from company JSON backup',
+      Number(afterJson?.totals?.difference) === 0 &&
+        Number(afterJson?.totals?.debit) > 0,
+      `debits ${afterJson?.totals?.debit}, difference ${afterJson?.totals?.difference}`,
+    );
   } finally {
     restore.child.kill('SIGTERM');
   }
@@ -452,6 +504,19 @@ async function main() {
   const size = statSync(finalPath).size;
   check('the demo backup file is written out', size > 0, `${finalName}, ${size} bytes`);
   console.log(`\nDemo backup file: ${finalPath}`);
+
+  // Write out the company JSON backup file
+  const jsonFinalName = `kayan-company-backup-${stamp}.json`;
+  const jsonFinalPath = join(OUT_DIR, jsonFinalName);
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(jsonFinalPath, jsonBytes);
+  const jsonSize = statSync(jsonFinalPath).size;
+  check(
+    'the company JSON backup file is written out and verified',
+    jsonSize > 0 && !jsonBytes.subarray(0, 5).toString('latin1').startsWith('PGDMP'),
+    `${jsonFinalName}, ${jsonSize} bytes (strictly JSON)`,
+  );
+  console.log(`\nDemo company JSON backup file: ${jsonFinalPath}`);
 
   const failed = results.filter((result) => !result.ok);
   console.log(
