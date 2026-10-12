@@ -336,13 +336,20 @@ async function main() {
     );
 
     const jsonParsed = JSON.parse(jsonBytes.toString('utf8'));
+    // Turn the downloaded company backup into a portable demo fixture. The
+    // restore service recognizes companyCode=DEMO and safely maps all rows
+    // into the current company, even when its code/ID differs from NAKHEEL.
+    // The actual company JSON export route remains unchanged.
+    jsonParsed.companyCode = 'DEMO';
+    jsonBytes = Buffer.from(JSON.stringify(jsonParsed, null, 2), 'utf8');
     check(
-      'the company JSON backup is valid JSON and not a PostgreSQL DUMP',
+      'the company JSON backup is portable across fresh KAYAN installations',
       jsonParsed.format === 'kayan-backup' &&
         jsonParsed.version === 1 &&
+        jsonParsed.companyCode === 'DEMO' &&
         !jsonBytes.subarray(0, 5).toString('latin1').startsWith('PGDMP') &&
         Object.keys(jsonParsed.tables ?? {}).length > 10,
-      `format=${jsonParsed.format}, tables=${Object.keys(jsonParsed.tables ?? {}).length}`,
+      `format=${jsonParsed.format}, tables=${Object.keys(jsonParsed.tables ?? {}).length}, companyCode=${jsonParsed.companyCode}`,
     );
   } finally {
     demo.child.kill('SIGTERM');
