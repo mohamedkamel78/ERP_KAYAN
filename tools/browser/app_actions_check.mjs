@@ -162,7 +162,13 @@ async function main() {
     ],
   });
 
-  browser.on('disconnected', () => log('DIED the browser went away'));
+  // Set once the run has its verdict. Closing the browser afterwards ends the
+  // page and the connection on purpose; those are not failures and must not
+  // be reported as if they were.
+  let finished = false;
+  browser.on('disconnected', () => {
+    if (!finished) log('DIED the browser went away');
+  });
 
   try {
     const page = await browser.newPage();
@@ -174,7 +180,9 @@ async function main() {
     // error closes the page underneath the check; without this, the run
     // simply stops and the exit code is all there is to go on.
     page.on('error', (error) => log(`DIED the page crashed: ${error.message}`));
-    page.on('close', () => log('DIED the page was closed'));
+    page.on('close', () => {
+      if (!finished) log('DIED the page was closed');
+    });
 
     // How many calls to the server carried a credential, and what the page
     // was allowed to keep. Both are counted rather than printed: the header
@@ -785,10 +793,19 @@ async function main() {
 
     // ───────────────────────────────────────────────────────── summary
     await shot('10-final');
+    // "Failed to load resource" is the browser reporting a refused request.
+    // Those are not JavaScript errors: every refusal is listed by address on
+    // its own HTTP line, and the server-side checks above and below judge
+    // them. What this check judges is whether the program itself threw.
+    const ownErrors = consoleErrors.filter(
+      (line) =>
+        !/favicon|fonts\.g/i.test(line) &&
+        !/^console: Failed to load resource: the server responded with a status of \d{3}/.test(line),
+    );
     check(
       'the page raised no uncaught errors of its own',
-      consoleErrors.filter((line) => !/favicon|fonts\.g/i.test(line)).length === 0,
-      consoleErrors.slice(0, 3).join(' / ') || 'none',
+      ownErrors.length === 0,
+      ownErrors.slice(0, 3).join(' / ') || 'none',
     );
     check(
       'the server answered every request the program made',
@@ -796,6 +813,7 @@ async function main() {
       serverErrors.slice(0, 3).join(' | ') || 'no 5xx was seen',
     );
   } finally {
+    finished = true;
     await browser.close().catch(() => {});
   }
 

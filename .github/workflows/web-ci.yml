@@ -234,32 +234,14 @@ jobs:
           # transcript with it, so the artifact explains itself.
           cp /tmp/browser.txt "${{ github.workspace }}/e2e-out/browser-check.log" 2>/dev/null || true
           if [ "$status" -ne 0 ]; then
-            # A 500 the server logged is worth more than any guess about
-            # one: the stack that followed it says which line failed.
+            # The whole verdict, packed into a few annotations: GitHub keeps
+            # only ten per step, and the transcript is much longer than that.
+            python3 tools/browser/ci_verdict.py /tmp/browser.txt
+            # A 500 the server logged comes with the stack that followed it.
             sed -r 's/\x1b\[[0-9;]*m//g' /tmp/kayan-server.log \
-              | grep -A 8 "Unhandled exception" | tail -40 \
-              | while IFS= read -r line; do echo "::error::server: $line"; done
-            # The tool prefixes what it saw - LABELS, INPUTS, SCREEN,
-            # LOGIN - so a failure says what the page really offered
-            # instead of only that a click missed.
-            # GitHub keeps only the first ten annotations of a kind, so the
-            # ones that say what failed go out before the ones that say what
-            # the page looked like. Getting this the wrong way round is how
-            # a run filled its quota with the login screen and dropped the
-            # verdict.
-            grep -E "^(FAIL|DIED|AUTH|STORAGE)|checks passed|the browser check itself broke" /tmp/browser.txt \
-              | head -6 | while IFS= read -r line; do
-                echo "::error::$line"
-              done
-            # ...then what the server refused, one line per address.
-            grep -E "^HTTP " /tmp/browser.txt | head -3 | while IFS= read -r line; do
-              echo "::error::$line"
-            done
-            # ...then whatever the log ended with, because a run that stops
-            # mid-sentence is exactly the run whose ending matters most.
-            tail -8 /tmp/browser.txt | while IFS= read -r line; do
-              echo "::error::tail: $line"
-            done
+              | grep -A 8 "Unhandled exception" | tail -20 \
+              | paste -sd'|' | fold -w 2500 | head -2 \
+              | while IFS= read -r line; do echo "::error title=server log::$line"; done
             exit "$status"
           fi
 
