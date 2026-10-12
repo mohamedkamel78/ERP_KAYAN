@@ -252,7 +252,9 @@ if (-not (Test-Path $installerFile)) {
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installerFile)) { Fail ("Could not download the official EDB PostgreSQL installer from " + $installerUrl) }
 }
 if ((Get-Item $installerFile).Length -lt 20000000) { Fail "The PostgreSQL installer download is incomplete or unexpectedly small." }
-if ((Get-PeMachine $installerFile) -ne 0x8664) { Fail "The embedded PostgreSQL installer is not a Windows x64 executable." }
+$installerHeader = [System.IO.File]::ReadAllBytes($installerFile)[0..1]
+if ($installerHeader[0] -ne 0x4D -or $installerHeader[1] -ne 0x5A) { Fail "The embedded PostgreSQL installer is not a Windows executable." }
+# EDB installer launchers may be PE32; the installed PostgreSQL server binaries are tested after setup.
 New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
 Copy-Item $installerFile $embeddedInstaller -Force
 if ((Get-Item $embeddedInstaller).Length -lt 20000000) { Fail "The PostgreSQL installer was not embedded into the KAYAN package." }
