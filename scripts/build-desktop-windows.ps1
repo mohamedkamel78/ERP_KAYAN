@@ -247,7 +247,7 @@ $extractRoot = Join-Path $env:TEMP "kayan-postgresql-runtime-$pgVersion"
 Write-Host "      downloading the official EDB PostgreSQL $pgVersion binary archive"
 if ((Test-Path $archiveFile) -and ((Get-Item $archiveFile).Length -lt 20000000)) { Remove-Item -Force $archiveFile }
 if (-not (Test-Path $archiveFile)) {
-  & curl.exe -fsSL --retry 3 --retry-delay 2 -o $archiveFile $archiveUrl
+  & curl.exe -fsSL --connect-timeout 20 --max-time 240 --retry 3 --retry-delay 2 --retry-all-errors -o $archiveFile $archiveUrl
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $archiveFile)) { Fail ("Could not download the official EDB PostgreSQL binary archive from " + $archiveUrl) }
 }
 if ((Get-Item $archiveFile).Length -lt 20000000) { Fail "The PostgreSQL binary archive is incomplete or unexpectedly small." }
