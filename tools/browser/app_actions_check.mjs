@@ -351,10 +351,29 @@ async function main() {
     };
 
     // ───────────────────────────────────────────────────── 1. sign in
-    await page.goto(APP_URL, { waitUntil: 'networkidle2', timeout: 90000 });
+    // `a11y=1` is the program's own switch: on the web Flutter only
+    // publishes the tree of button names when something asks for it, and
+    // these checks follow names rather than pixels.
+    const separator = APP_URL.includes('?') ? '&' : '?';
+    await page.goto(`${APP_URL}${separator}a11y=1`, {
+      waitUntil: 'networkidle2',
+      timeout: 90000,
+    });
     await wait(6000); // Flutter's first paint
     await shot('01-login');
     await describe('01-login');
+
+    const published = await publishedLabels();
+    check(
+      'the program publishes the names of its controls',
+      published.length > 3 &&
+        !published.every((node) => /enable accessibility/i.test(node.label || '')),
+      `${published.length} named control(s)` +
+        (published.length <= 3
+          ? ` - only: ${published.map((node) => node.label || node.text).join(' | ')}`
+          : ''),
+    );
+    if (published.length <= 3) return 1;
 
     // Flutter web keeps a real <input> element for each text field, so the
     // credentials are typed into those rather than into a guessed point on
