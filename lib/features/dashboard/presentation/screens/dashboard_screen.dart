@@ -187,7 +187,7 @@ class _CompanyBanner extends StatelessWidget {
             width: 56,
             height: 56,
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => CircleAvatar(
+            errorBuilder: (_, _, _) => CircleAvatar(
               radius: 28,
               backgroundColor: theme.colorScheme.primaryContainer,
               child: Icon(Icons.business, color: theme.colorScheme.onPrimaryContainer),

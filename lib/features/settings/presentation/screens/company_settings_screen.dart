@@ -260,7 +260,7 @@ class _LogoRowState extends ConsumerState<_LogoRow> {
                     width: 56,
                     height: 56,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Icon(
+                    errorBuilder: (_, _, _) => const Icon(
                       Icons.business,
                       size: 28,
                     ),
