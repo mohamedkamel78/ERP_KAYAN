@@ -261,7 +261,7 @@ $stalePg = Join-Path $toolsFolder "pgsql"
 if (Test-Path $stalePg) { Remove-Item -Recurse -Force $stalePg }
 & tar.exe -xf $zipFile -C $toolsFolder
 if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
-$portablePg = Join-Path $toolsFolder "pgsql\\bin"
+$portablePg = Join-Path $toolsFolder "pgsql\bin"
 if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
   Fail "The official EDB PostgreSQL archive did not unpack to $portablePg."
 }
