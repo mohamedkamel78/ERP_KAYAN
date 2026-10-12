@@ -40,7 +40,31 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       originalUrl?: string;
       url?: string;
       route?: { path?: string };
+      aborted?: boolean;
     }>();
+
+    // Nothing can be said to someone who has already been answered - or who
+    // has gone away. Writing again is what turns an ordinary failure into
+    // "Cannot set headers after they are sent", which hides the real one
+    // behind a message about plumbing. So: log it, close it off if it is
+    // still open, and stop.
+    if (response.headersSent || response.writableEnded || request.aborted) {
+      this.logger.warn(
+        `The reply to ${request.method ?? '?'} ${
+          request.originalUrl ?? request.url ?? '?'
+        } had already gone when this failure arrived: ${
+          exception instanceof Error ? exception.message : String(exception)
+        }`,
+      );
+      if (!response.writableEnded) {
+        try {
+          response.end();
+        } catch {
+          /* it is gone; there is nothing left to do */
+        }
+      }
+      return;
+    }
 
     let status: number;
     let detail = 'Unexpected server error';
@@ -83,13 +107,24 @@ export class ProblemDetailsFilter implements ExceptionFilter {
       );
     }
 
-    response.status(status).json({
-      type: 'about:blank',
-      title: HttpStatus[status] ?? 'Error',
-      status,
-      detail,
-      ...extra,
-    });
+    try {
+      response.status(status).json({
+        type: 'about:blank',
+        title: HttpStatus[status] ?? 'Error',
+        status,
+        detail,
+        ...extra,
+      });
+    } catch (error) {
+      // The one thing this filter must never do is fail while reporting a
+      // failure: the answer is already lost, and a thrown error here would
+      // only bury the one that mattered.
+      this.logger.error(
+        `The answer could not be written: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /// Known non-HTTP failures, turned into something a person can act on.
