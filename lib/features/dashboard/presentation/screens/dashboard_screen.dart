@@ -27,8 +27,15 @@ class DashboardScreen extends ConsumerWidget {
     final branchesAsync = ref.watch(branchesProvider);
     final isArabic = Localizations.localeOf(context).languageCode == 'ar';
 
-    final company = companyAsync.asData?.value ?? const <String, dynamic>{};
-    final branches = branchesAsync.asData?.value ?? const <Map<String, dynamic>>[];
+    final companyRaw = companyAsync.asData?.value;
+    final company = companyRaw != null
+        ? Map<String, dynamic>.from(companyRaw)
+        : const <String, dynamic>{};
+
+    final branchesRaw = branchesAsync.asData?.value;
+    final branches = branchesRaw != null
+        ? branchesRaw.map((e) => Map<String, dynamic>.from(e)).toList()
+        : const <Map<String, dynamic>>[];
 
     // Company names:
     final nameAr = (company['nameAr'] as String?)?.trim() ?? '';

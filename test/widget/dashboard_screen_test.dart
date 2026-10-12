@@ -16,7 +16,7 @@ void main() {
   const sampleLogoBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
-  const testCompany = {
+  final Map<String, dynamic> testCompany = <String, dynamic>{
     'id': 'company-1',
     'code': 'KAYAN-01',
     'nameAr': 'شركة الكيان للتجارة',
@@ -29,8 +29,8 @@ void main() {
     'logoBase64': sampleLogoBase64,
   };
 
-  const testBranches = [
-    {
+  final List<Map<String, dynamic>> testBranches = <Map<String, dynamic>>[
+    <String, dynamic>{
       'id': 'branch-1',
       'code': 'HQ',
       'nameAr': 'المقر الرئيسي',
@@ -38,7 +38,7 @@ void main() {
       'kind': 'HEADQUARTERS',
       'isActive': true,
     },
-    {
+    <String, dynamic>{
       'id': 'branch-2',
       'code': 'ALX',
       'nameAr': 'فرع الإسكندرية',
