@@ -222,16 +222,25 @@ async function main() {
     // more than a click that found nothing, so each one is printed with the
     // sentence the server sent back about it.
     const serverErrors = [];
+    // Every answer that is not a success, not only the server's own
+    // failures. A refused request is how an expired ticket, a missing token
+    // and a wrong parameter all announce themselves, and a run that only
+    // looked at 5xx could see a screen full of 401s and report nothing.
     page.on('response', async (response) => {
-      if (response.status() < 500) return;
+      const status = response.status();
+      if (status < 400 || /favicon/.test(response.url())) return;
       let body = '';
       try {
-        body = (await response.text()).replace(/\s+/g, ' ').slice(0, 300);
+        body = (await response.text()).replace(/\s+/g, ' ').slice(0, 200);
       } catch {
         body = '(the body was gone before it could be read)';
       }
-      serverErrors.push(`${response.status()} ${response.url()} ${body}`);
-      log(`SERVER ${response.status()} ${response.url()} ${body}`);
+      if (status >= 500) {
+        serverErrors.push(`${status} ${response.url()} ${body}`);
+        log(`SERVER ${status} ${response.url()} ${body}`);
+      } else {
+        log(`HTTP ${status} ${response.url()} ${body}`);
+      }
     });
 
     // What the server answered. The one response that matters most is the
