@@ -54,6 +54,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Before the Flutter SDK is fetched: a single wrong `../` stops the
+      # analyser from starting at all, and GitHub shows only the first ten
+      # problems it finds. This names every one of them in a few seconds, so
+      # a run is never spent discovering them one at a time.
+      - name: Every Dart import points at a real file
+        run: node tools/check-dart-imports.mjs
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:

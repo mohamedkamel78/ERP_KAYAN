@@ -1,4 +1,4 @@
-import '../../../../core/network/api_client.dart';
+import '../../../core/network/api_client.dart';
 
 /// What a reset would take away, counted so the warning can name numbers.
 class ResetPreview {

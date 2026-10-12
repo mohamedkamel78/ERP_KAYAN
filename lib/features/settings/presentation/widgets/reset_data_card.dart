@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/error/failure.dart';
 import '../../../../shared/extensions/l10n_extension.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
-import '../data/reset_data_source.dart';
+import '../../data/reset_data_source.dart';
 import '../providers/reset_providers.dart';
 
 /// «إعادة ضبط بيانات البرنامج» — Reset ERP Data.
