@@ -157,8 +157,11 @@ class _FileCard extends ConsumerWidget {
         controller.failed(describeApiError(error));
         return;
       }
+      // A cancelled dialogue changes nothing: the file chosen before, and the
+      // read of it, stay on the screen for the person to act on.
+      if (picked == null) return;
       controller.chooseFile(picked);
-      if (picked != null) await _read(ref, dryRun: true);
+      await _read(ref, dryRun: true);
     }
 
     return Card(

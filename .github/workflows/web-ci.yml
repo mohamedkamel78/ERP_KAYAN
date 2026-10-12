@@ -193,6 +193,14 @@ jobs:
             done
             exit 1
           fi
+          # The restore rehearsal opens a scratch database as the application
+          # role, which needs CREATEDB. It is granted to this throwaway CI role
+          # only: prepare-database.mjs does not grant it on a customer's
+          # machine, and there the program reports that the rehearsal could
+          # not run rather than running it. Without this grant, this run would
+          # test the fallback instead of the rehearsal.
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d postgres -q -v ON_ERROR_STOP=1 \
+            -c "ALTER ROLE kayan CREATEDB"
 
       - name: Take the web build
         uses: actions/download-artifact@v4

@@ -527,10 +527,18 @@ async function main() {
     async function clickDialogButton(names, { timeoutMs = 10000, step = 'dialog' } = {}) {
       const list = Array.isArray(names) ? names : [names];
       const deadline = Date.now() + timeoutMs;
+      let dialogScrolls = 0;
       while (Date.now() < deadline) {
         const found = (await findAllNodes(list, ['button'])).filter((node) => node.isControl);
         if (found.length > 0) {
           const at = found.reduce((best, node) => (node.area > best.area ? node : best));
+          if (at.y > 860 && dialogScrolls < 4) {
+            dialogScrolls += 1;
+            await page.mouse.move(720, 450);
+            await page.mouse.wheel({ deltaY: Math.min(at.y - 450, 600) });
+            await wait(500);
+            continue;
+          }
           log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)} (dialogue button)`);
           await page.mouse.click(at.x, at.y);
           return true;
@@ -862,7 +870,9 @@ async function main() {
     // The read showed what would change. This is the press that changes it:
     // the server has to take the rows, and the screen has to say so.
     const commitMark = answers.length;
-    const clickedCommit = await clickNamed(['نفّذ الاستيراد', 'Import for real'], {
+    // The largest control, not the smallest: the step indicator of the same
+    // screen carries the same words ("Import for real" is also step four).
+    const clickedCommit = await clickDialogButton(['نفّذ الاستيراد', 'Import for real'], {
       timeoutMs: 8000,
       step: 'import-commit',
     });
@@ -883,6 +893,7 @@ async function main() {
       clickedCommit && committedOk && /Imported|تم الاستيراد/.test(importText),
       commitAnswers.map((entry) => `status ${entry.status}`).join(', ') || 'no write request was sent',
     );
+    if (!(clickedCommit && committedOk)) await describe('import-commit');
 
     // ───────────────────────────────────────────── 5. full backup
     const beforeBackup = network.length;
@@ -971,10 +982,15 @@ async function main() {
       restoreAnswered && afterRestore.length > 0 && afterRestore.every((entry) => entry.status === 200),
       afterRestore.map((entry) => `status ${entry.status}`).join(', ') || 'no list was requested after the restore',
     );
-    check(
-      'the screen says the restore completed',
-      /Restore completed|تمت الاستعادة بنجاح/.test(await screenText()),
-    );
+    // The notice is written after the server's answer, so it is waited for
+    // rather than read once.
+    let restoreNoticed = false;
+    for (let attempt = 0; attempt < 30 && !restoreNoticed; attempt += 1) {
+      restoreNoticed = /Restore completed|تمت الاستعادة بنجاح/.test(await screenText());
+      if (!restoreNoticed) await wait(500);
+    }
+    check('the screen says the restore completed', restoreNoticed);
+    if (!restoreNoticed) await describe('after-restore');
 
     // ───────────────────── 6. financial periods, behind the sign-in
     const periodsMark = answers.length;
