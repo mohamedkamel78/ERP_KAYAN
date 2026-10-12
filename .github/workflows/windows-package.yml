@@ -133,6 +133,9 @@ jobs:
         run: |
           try {
             & ./scripts/smoke-test-installed-windows.ps1 -SetupPath "build\desktop\KAYAN-Setup.exe" *> build\smoke-log.txt
+          } catch {
+            Add-Content -Path build\smoke-log.txt -Value ($_ | Out-String)
+            throw
           } finally {
             if (Test-Path build\smoke-log.txt) {
               Get-Content build\smoke-log.txt

@@ -869,6 +869,17 @@ class RuntimeSettings {
       }
       if (value.isNotEmpty) values[key] = value;
     }
+    if ((values['JWT_ACCESS_SECRET'] == null ||
+            values['JWT_ACCESS_SECRET']!.isEmpty) &&
+        values['JWT_SECRET'] != null &&
+        values['JWT_SECRET']!.isNotEmpty) {
+      values['JWT_ACCESS_SECRET'] = values['JWT_SECRET']!;
+    }
+    if ((values['CORS_ORIGINS'] == null || values['CORS_ORIGINS']!.isEmpty) &&
+        values['CORS_ORIGIN'] != null &&
+        values['CORS_ORIGIN']!.isNotEmpty) {
+      values['CORS_ORIGINS'] = values['CORS_ORIGIN']!;
+    }
     return RuntimeSettings(values, port);
   }
 

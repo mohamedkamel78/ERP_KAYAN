@@ -109,7 +109,7 @@ try {
 
   $clientPath = Join-Path $env:ProgramFiles "KAYAN ERP\erp_kayan.exe"
   if (-not (Test-Path $clientPath)) { throw ("The installed KAYAN client is missing: " + $clientPath) }
-  $client = Start-Process -FilePath $clientPath -PassThru
+  $client = Start-Process -FilePath $clientPath -WorkingDirectory (Split-Path -Parent $clientPath) -PassThru
   $clientHealth = $null
   try {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -129,6 +129,7 @@ try {
           $details += Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue
         }
       }
+      foreach ($line in $details) { Write-Host $line }
       throw ("The actual installed client did not start a healthy local server after 60 seconds." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
     }
     Write-Host "PASS: launching installed erp_kayan.exe by itself started the local API and health check passed."

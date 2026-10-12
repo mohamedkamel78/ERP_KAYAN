@@ -301,11 +301,17 @@ switch ($Action) {
       $jwtRefreshSecret = New-RandomSecret 32
       $envContent = @(
         "# Managed by KAYAN ERP service installer",
+        "HOST=0.0.0.0",
         "PORT=3000",
+        "NODE_ENV=production",
         "DATABASE_URL=postgresql://erp_app:$encodedPw@127.0.0.1:$Port/erp_kayan?schema=public",
+        "ADMIN_DATABASE_URL=postgresql://postgres@127.0.0.1:$Port/postgres",
+        "JWT_ACCESS_SECRET=$jwtSecret",
         "JWT_SECRET=$jwtSecret",
         "JWT_REFRESH_SECRET=$jwtRefreshSecret",
-        "CORS_ORIGIN=http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,lan"
+        "JWT_ACCESS_TTL=900",
+        "JWT_REFRESH_TTL=1209600",
+        "CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,lan"
       ) -join "`r`n"
       [System.IO.File]::WriteAllText($envFile, ($envContent + "`r`n"), $utf8NoBom)
     }
