@@ -62,8 +62,50 @@ try {
     $err = if (Test-Path $stderr) { Get-Content $stderr -Raw } else { "" }
     throw ("The installed API did not report status=ok and database=up." + [Environment]::NewLine + $out + [Environment]::NewLine + $err)
   }
-  Write-Host "PASS: KAYAN-Setup.exe installed the database service, prepared the database, and started a healthy API."
+  Write-Host "PASS: bundled Node API and PostgreSQL returned status=ok, database=up."
+
+  # Stop the manually launched API and prove the actual packaged Flutter client
+  # starts its own backend. This directly covers the original cannot-connect
+  # failure mode instead of testing Node in isolation.
+  if ($api -and -not $api.HasExited) { Stop-Process -Id $api.Id -Force -ErrorAction SilentlyContinue }
+  if ($api) { try { Wait-Process -Id $api.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { } }
+  $api = $null
+  Start-Sleep -Seconds 2
+  $clientPath = Join-Path $env:ProgramFiles "KAYAN ERP\erp_kayan.exe"
+  if (-not (Test-Path $clientPath)) { throw ("The installed KAYAN client is missing: " + $clientPath) }
+  $client = Start-Process -FilePath $clientPath -PassThru
+  $clientHealth = $null
+  try {
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+      if ($client.HasExited) { throw ("The installed KAYAN client exited with code " + $client.ExitCode + " before starting its backend.") }
+      try {
+        $clientHealth = Invoke-RestMethod -Uri "http://127.0.0.1:3000/api/v1/health" -TimeoutSec 2
+        if ($clientHealth.status -eq "ok" -and $clientHealth.database -eq "up") { break }
+      } catch { }
+      Start-Sleep -Seconds 1
+    }
+    if (-not $clientHealth -or $clientHealth.status -ne "ok" -or $clientHealth.database -ne "up") {
+      $logDir = Join-Path $env:APPDATA "KAYAN-ERP"
+      $details = @()
+      if (Test-Path $logDir) {
+        Get-ChildItem $logDir -File -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 2MB } | ForEach-Object {
+          $details += ("--- " + $_.FullName + " ---")
+          $details += Get-Content $_.FullName -Tail 80 -ErrorAction SilentlyContinue
+        }
+      }
+      throw ("The actual installed client did not start a healthy local server after 60 seconds." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
+    }
+    Write-Host "PASS: launching installed erp_kayan.exe by itself started the local API and health check passed."
+  } finally {
+    if ($client -and -not $client.HasExited) {
+      $null = $client.CloseMainWindow()
+      try { Wait-Process -Id $client.Id -Timeout 10 -ErrorAction SilentlyContinue } catch { }
+      if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force -ErrorAction SilentlyContinue }
+    }
+  }
 } finally {
   if ($api -and -not $api.HasExited) { Stop-Process -Id $api.Id -Force -ErrorAction SilentlyContinue }
+  $installNode = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -eq $node -and $_.CommandLine -like "*$backend*" -and $_.CommandLine -like "*dist*src*main.js*" }
+  foreach ($process in $installNode) { Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue }
   Stop-Service -Name "KAYAN_PostgreSQL" -Force -ErrorAction SilentlyContinue
 }
