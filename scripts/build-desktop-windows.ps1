@@ -305,11 +305,27 @@ if (-not $pgBin) {
 }
 $pgFolder = Join-Path $backendFolder "pg"
 New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
-foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {
-  Copy-Item (Join-Path $pgBin $tool) $pgFolder -Force
+foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe")) {
+  $src = Join-Path $pgBin $tool
+  if (Test-Path $src) {
+    Copy-Item $src $pgFolder -Force
+  }
 }
-# The two programs load libpq and its neighbours from their own folder.
+# The programs load libpq and its neighbours from their own folder.
 Get-ChildItem $pgBin -Filter "*.dll" | Copy-Item -Destination $pgFolder -Force
+
+# Copy PostgreSQL share directory if available (needed by initdb / postgres)
+$pgRoot = Split-Path -Parent $pgBin
+$shareCandidates = @((Join-Path $pgRoot "share"), (Join-Path $pgBin "share"))
+foreach ($cand in $shareCandidates) {
+  if (Test-Path $cand) {
+    Copy-Item $cand (Join-Path $pgFolder "share") -Recurse -Force
+    Write-Host "      bundled PostgreSQL share directory from $cand"
+    break
+  }
+}
+
+Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
 
 # The copy is only real if it runs from where it now sits.
 foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {

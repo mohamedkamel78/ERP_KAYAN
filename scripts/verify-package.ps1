@@ -113,6 +113,7 @@ Check "the compiled server is there (backend\dist\src\main.js)" (Has "backend\di
 Check "the database schema travels with it" (Has "backend\prisma\schema.prisma")
 Check "its migrations travel with it" (Has "backend\prisma\migrations")
 Check "the step that prepares the database is there" (Has "backend\scripts\prepare-database.mjs")
+Check "the database manager is there" (Has "backend\scripts\manage-kayan-db.ps1")
 if (Has "backend\scripts\prepare-database.mjs") {
   Check "the first administrator step is inside it" `
     ((Get-Content (Join-Path $folder "backend\scripts\prepare-database.mjs") -Raw) -match "KAYAN-DB-STATE")
