@@ -14,7 +14,7 @@ import re
 import sys
 
 LIMIT = 2600      # characters per annotation, comfortably under GitHub's cap
-MAX_PARTS = 4     # ten per step are allowed; leave room for the others
+MAX_PARTS = 5     # ten per step are allowed; leave room for the others
 
 
 def escape(text: str) -> str:
@@ -28,7 +28,8 @@ def main() -> int:
 
     verdict = [l for l in lines if re.match(r'^(FAIL|DIED) ', l)]
     summary = [l for l in lines if 'checks passed' in l or 'itself broke' in l]
-    passes = sum(1 for l in lines if l.startswith('PASS '))
+    passed = [l[6:].split(' - ')[0][:90] for l in lines if l.startswith('PASS ')]
+    done = [l for l in lines if re.match(r'^(CLICK|TEMPLATE|FILE-CANCEL|LOGIN|INPUTS) ', l)]
     refused, seen = [], set()
     for line in lines:
         if line.startswith('HTTP ') and line not in seen:
@@ -38,7 +39,9 @@ def main() -> int:
     tail = lines[-12:]
 
     sections = [
-        ('verdict', [f'{passes} PASS lines in the transcript'] + summary + verdict),
+        ('verdict', summary + verdict),
+        ('what was done', done[-20:] or ['no clicks recorded']),
+        ('passed', [f'{len(passed)} passed: ' + ' | '.join(passed)]),
         ('refused by the server', refused[:20] or ['nothing refused']),
         ('sign-in state', state[:12] or ['no sign-in state recorded']),
         ('end of the transcript', tail),

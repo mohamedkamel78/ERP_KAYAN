@@ -695,6 +695,10 @@ async function main() {
       step: 'import-template',
     });
     const templateArrived = await waitForDownload(beforeTemplate);
+    log(
+      `TEMPLATE clicked=${clickedTemplate} downloads-seen=${templateArrived.length} ` +
+        `ticket-requests=${responses.filter((entry) => /download-ticket/.test(entry.url)).length}`,
+    );
     check(
       'the template button downloads a file',
       clickedTemplate && templateArrived.length > 0,
@@ -738,15 +742,29 @@ async function main() {
     let cancelRecovered = false;
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        // Each attempt says what happened, so a failure shows which step
+        // stopped: the button not found, or no dialogue opening.
+        let clicked = false;
         const [chooser] = await Promise.all([
-          page.waitForFileChooser({ timeout: 10000 }),
-          clickNamed(['ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
+          page.waitForFileChooser({ timeout: 10000 }).catch((error) => {
+            log(`FILE-CANCEL attempt ${attempt + 1}: no dialogue opened (${error.message.split('\n')[0]})`);
+            return [null];
+          }),
+          clickNamed(['ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }).then(
+            (found) => {
+              clicked = found;
+              return found;
+            },
+          ),
         ]);
+        log(`FILE-CANCEL attempt ${attempt + 1}: button found=${clicked}, dialogue=${chooser ? 'opened' : 'not opened'}`);
+        if (!chooser) throw new Error('no dialogue');
         await chooser.dismiss();
         await wait(1500);
       }
       cancelRecovered = true;
-    } catch {
+    } catch (error) {
+      log(`FILE-CANCEL stopped: ${error.message}`);
       cancelRecovered = false;
     }
     check('closing the file dialogue twice in a row is fine', cancelRecovered);

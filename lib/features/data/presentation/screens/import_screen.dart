@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/platform/browser_actions.dart';
 import '../../../../core/platform/picked_file.dart';
 import '../../../../shared/extensions/l10n_extension.dart';
+import '../../../../shared/widgets/download_feedback.dart';
 import '../../../common/presentation/screens/module_scaffold.dart';
 import '../providers/data_providers.dart';
 
@@ -73,14 +74,21 @@ class ImportScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
-                    onPressed: () async {
+                    // Through the same path as every other download, so a
+                    // refusal (a ticket that could not be issued, a template
+                    // that could not be built) is shown to the person as its
+                    // own sentence instead of an unhandled error that leaves
+                    // the button doing nothing.
+                    onPressed: () {
                       final language =
                           Localizations.localeOf(context).languageCode;
-                      final url = await ref.read(reportLinkProvider).importTemplate(
-                            kind: state.kind.slug,
-                            language: language,
-                          );
-                      downloadFile(url);
+                      runDownload(
+                        context,
+                        ref.read(reportLinkProvider).importTemplate(
+                              kind: state.kind.slug,
+                              language: language,
+                            ),
+                      );
                     },
                     icon: const Icon(Icons.download_outlined),
                     label: Text(l10n.downloadTemplate),
