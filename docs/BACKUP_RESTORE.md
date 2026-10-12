@@ -132,3 +132,11 @@ kayan-safety-….dump` with normal DB credentials, then restart.
 * restore from a server file or an uploaded `.dump` — behind a warning dialog
   **and** a typed `RESTORE` confirmation;
 * shows the result, the safety-backup name, or the exact failure.
+
+## The demo backup file
+
+A ready-made, entirely fictional company is published as a downloadable
+PostgreSQL Custom archive, built by the program's own backup route and proved
+by restoring it into a second throwaway database on every push. See
+**[The demo backup file](DEMO_BACKUP.md)** for what is in it, how to download
+it, and how to put it in.

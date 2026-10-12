@@ -1,0 +1,127 @@
+name: Demo backup file
+
+# Builds the one demo backup file, proves it restores, and puts it where
+# anyone can download it from the run.
+#
+# The file is a PostgreSQL Custom archive made by the program's own backup
+# route. It is never committed: it is attached to the run as an artifact so
+# the repository stays small and the file is still one click away.
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  demo-backup:
+    name: Build and verify the demo backup
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Take the source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # pg_dump and pg_restore are the tools the backup and restore screens
+      # call. On the runner they have to be installed before either screen
+      # can be asked to do anything.
+      - name: PostgreSQL client tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Generate the Prisma client
+        working-directory: backend
+        run: npx prisma generate
+
+      - name: Build the server
+        working-directory: backend
+        run: npm run build
+
+      - name: Build the demo backup and prove it restores
+        id: demo
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/erp_kayan_demo?schema=public
+          KAYAN_RESTORE_URL: postgresql://postgres:postgres@127.0.0.1:5432/erp_kayan_demo_restore?schema=public
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+          JWT_ACCESS_SECRET: demo-build-access-secret
+          JWT_REFRESH_SECRET: demo-build-refresh-secret
+        run: |
+          set +e
+          npm run build:demo > /tmp/demo-build.txt 2>&1
+          status=$?
+          cat /tmp/demo-build.txt
+          set -e
+          if [ "$status" -ne 0 ]; then
+            tail -n 25 /tmp/demo-build.txt | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit "$status"
+          fi
+
+      - name: Fingerprint the file
+        id: fingerprint
+        run: |
+          cd backend/dist-demo
+          file=$(ls kayan-demo-backup-*.dump | head -n 1)
+          sha256sum "$file" | tee SHA256SUMS.txt
+          {
+            echo "### Demo backup file"
+            echo
+            echo "- file: \`$file\`"
+            echo "- size: $(du -h "$file" | cut -f1)"
+            echo "- sha256: \`$(cut -d' ' -f1 < SHA256SUMS.txt)\`"
+            echo
+            echo "It was restored into a second throwaway database during this run and the books were checked after the restore."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach the demo backup to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: kayan-demo-backup
+          path: |
+            backend/dist-demo/*.dump
+            backend/dist-demo/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach the build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kayan-demo-backup-log
+          path: /tmp/demo-build.txt
+          if-no-files-found: ignore
+          retention-days: 14
