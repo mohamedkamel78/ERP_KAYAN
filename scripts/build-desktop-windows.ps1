@@ -245,7 +245,7 @@ $zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windo
 $zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
 Write-Host "      preparing the official EDB PostgreSQL $pgVersion distribution"
 New-Item -ItemType Directory -Force -Path $toolsFolder | Out-Null
-if (Test-Path $zipFile -and (Get-Item $zipFile).Length -le 300000000) {
+if ((Test-Path $zipFile) -and ((Get-Item $zipFile).Length -le 300000000)) {
   Remove-Item -Force $zipFile
 }
 if (-not (Test-Path $zipFile)) {
