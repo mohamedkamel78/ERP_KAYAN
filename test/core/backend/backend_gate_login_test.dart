@@ -86,6 +86,7 @@ void main() {
   test(
     'authControllerProvider signs in against dynamic local server port via overridden appConfigProvider',
     () async {
+      HttpOverrides.global = null;
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
 
