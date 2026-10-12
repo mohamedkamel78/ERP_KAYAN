@@ -73,6 +73,7 @@ export class CompanyService {
       address: company.address,
       hasLogo: (company.logoData?.length ?? 0) > 0,
       logoMime: company.logoData ? company.logoMime : null,
+      logoBase64: company.logoData ? Buffer.from(company.logoData).toString('base64') : null,
       isActive: company.isActive,
     };
   }

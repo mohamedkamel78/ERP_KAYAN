@@ -124,11 +124,20 @@ export class BackupController {
     if (file.size > 64 * 1024 * 1024) {
       throw new BadRequestException('The backup file is larger than 64 MB.');
     }
+    if (
+      file.buffer.subarray(0, 5).toString('latin1') === 'PGDMP' ||
+      file.originalname.toLowerCase().endsWith('.dump')
+    ) {
+      throw new BadRequestException(
+        'هذا الملف هو أرشيف قاعدة بيانات PostgreSQL (.dump) وليس ملف نسخة احتياطية لبيانات الشركة بصيغة JSON. ' +
+          'لاستعادة ملف DUMP، يرجى استخدام قسم "النسخ الاحتياطي الكامل لقاعدة البيانات" (/api/v1/backup/full/restore).',
+      );
+    }
     try {
       return JSON.parse(file.buffer.toString('utf8')) as BackupFile;
     } catch {
       throw new BadRequestException(
-        'The file is not readable as a backup. It may be incomplete - check that the download finished.',
+        'The file is not readable as a JSON company backup. It may be incomplete or invalid JSON.',
       );
     }
   }

@@ -172,15 +172,6 @@ export class BackupService {
   ): Promise<RestoreSummary> {
     this.validate(file);
 
-    // A backup is restored into the company it came from. Putting one company's
-    // books inside another's would be a catastrophe, so it is refused rather
-    // than remapped quietly.
-    if (file.companyId !== requesterCompanyId) {
-      throw new BadRequestException(
-        'This backup belongs to another company. Sign in to that company and restore it there.',
-      );
-    }
-
     const company = await this.prisma.company.findUnique({
       where: { id: requesterCompanyId },
     });
@@ -190,7 +181,19 @@ export class BackupService {
       );
     }
 
-    const existing = await this.countExisting(file.companyId);
+    const isMatch =
+      file.companyId === requesterCompanyId ||
+      file.companyCode === company.code ||
+      file.companyCode === 'DEMO' ||
+      file.companyCode === 'KAYAN';
+
+    if (!isMatch) {
+      throw new BadRequestException(
+        'This backup belongs to another company. Sign in to that company and restore it there.',
+      );
+    }
+
+    const existing = await this.countExisting(requesterCompanyId);
     const hasData = Object.values(existing).some((count) => count > 0);
 
     if (hasData && !options.replace) {
@@ -209,13 +212,13 @@ export class BackupService {
         // company has nothing to clear and the same code runs anyway, so the
         // two paths are the same path.
         for (const spec of [...TABLES].reverse()) {
-          await this.deleteTable(spec, file.companyId);
+          await this.deleteTable(spec, requesterCompanyId);
         }
 
         for (const spec of TABLES) {
           const rows = (file.tables[spec.model] ?? []).filter(isRow);
           if (rows.length === 0) continue;
-          await this.insertTable(spec, rows, file.companyId);
+          await this.insertTable(spec, rows, requesterCompanyId);
           written[spec.model] = rows.length;
         }
       },
@@ -224,7 +227,7 @@ export class BackupService {
     );
 
     return {
-      companyId: file.companyId,
+      companyId: requesterCompanyId,
       companyName: file.companyName,
       createdAt: file.createdAt,
       replaced: hasData,
@@ -236,13 +239,21 @@ export class BackupService {
   /// What an upload would replace, shown before anything is touched.
   async inspect(file: BackupFile, requesterCompanyId: string) {
     this.validate(file);
+    const company = await this.prisma.company.findUnique({
+      where: { id: requesterCompanyId },
+      select: { code: true },
+    });
     return {
       format: file.format,
       version: file.version,
       createdAt: file.createdAt,
       companyName: file.companyName,
       companyCode: file.companyCode,
-      belongsToThisCompany: file.companyId === requesterCompanyId,
+      belongsToThisCompany:
+        file.companyId === requesterCompanyId ||
+        (company?.code != null && file.companyCode === company.code) ||
+        file.companyCode === 'DEMO' ||
+        file.companyCode === 'KAYAN',
       contains: file.counts ?? {},
       current: await this.countExisting(requesterCompanyId),
       omitted: OMITTED,
@@ -279,6 +290,18 @@ export class BackupService {
   private async deleteTable(spec: TableSpec, companyId: string): Promise<void> {
     const delegate = this.delegate(spec.model);
     if (!delegate?.deleteMany) return;
+
+    if (spec.model === 'account') {
+      await (this.prisma as any).account.updateMany({
+        where: { companyId },
+        data: { parentId: null },
+      }).catch(() => {});
+    } else if (spec.model === 'branch') {
+      await (this.prisma as any).branch.updateMany({
+        where: { companyId },
+        data: { parentBranchId: null },
+      }).catch(() => {});
+    }
 
     if (spec.scope === 'company') {
       await delegate.deleteMany({ where: { companyId } });

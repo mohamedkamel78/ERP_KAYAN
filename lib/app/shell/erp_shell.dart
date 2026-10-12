@@ -52,18 +52,37 @@ class ErpShell extends ConsumerWidget {
       body: isWide
           ? Row(
               children: [
-                NavigationRail(
-                  extended: width >= _extendedBreakpoint,
-                  selectedIndex: selectedIndex,
-                  onDestinationSelected: (index) =>
-                      context.go(items[index].path),
-                  destinations: [
-                    for (final item in items)
-                      NavigationRailDestination(
-                        icon: Icon(item.icon),
-                        label: Text(item.label),
-                      ),
-                  ],
+                // A visible, explicitly scrollable navigation list keeps
+                // every module reachable even on short screens in Arabic RTL.
+                // The scrollbar gives users an obvious way to move up/down.
+                SizedBox(
+                  width: width >= _extendedBreakpoint ? 240 : 80,
+                  child: Scrollbar(
+                    thumbVisibility: true,
+                    child: ListView(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      children: [
+                        for (final item in items)
+                          width >= _extendedBreakpoint
+                              ? ListTile(
+                                  leading: Icon(item.icon),
+                                  title: Text(item.label),
+                                  selected: item.path == currentPath,
+                                  onTap: () => context.go(item.path),
+                                )
+                              : Tooltip(
+                                  message: item.label,
+                                  child: IconButton(
+                                    onPressed: () => context.go(item.path),
+                                    icon: Icon(item.icon),
+                                    color: item.path == currentPath
+                                        ? Theme.of(context).colorScheme.primary
+                                        : null,
+                                  ),
+                                ),
+                      ],
+                    ),
+                  ),
                 ),
                 const VerticalDivider(width: 1),
                 Expanded(child: child),

@@ -6,6 +6,7 @@ import { PrismaModule } from './common/prisma/prisma.module';
 import { AuditModule } from './common/audit/audit.module';
 import { MaintenanceModule } from './common/maintenance/maintenance.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { PermissionsGuard } from './common/guards/permissions.guard';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { AccountingModule } from './modules/accounting/accounting.module';
 import { AdminModule } from './modules/admin/admin.module';
@@ -49,6 +50,10 @@ import { SalesModule } from './modules/sales/sales.module';
     { provide: APP_GUARD, useClass: RateLimitGuard },
     // Authentication is required everywhere unless a route is marked @Public().
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Authorization is registered here rather than in one feature module: it
+    // is a rule about every route, so it must not depend on which modules
+    // happen to be imported. (It used to ride in with AccountingModule.)
+    { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
 export class AppModule {}

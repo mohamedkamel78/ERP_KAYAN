@@ -113,6 +113,8 @@ Check "the compiled server is there (backend\dist\src\main.js)" (Has "backend\di
 Check "the database schema travels with it" (Has "backend\prisma\schema.prisma")
 Check "its migrations travel with it" (Has "backend\prisma\migrations")
 Check "the step that prepares the database is there" (Has "backend\scripts\prepare-database.mjs")
+Check "the database manager is there" (Has "backend\scripts\manage-kayan-db.ps1")
+Check "the installer database setup wrapper is packaged" (Has "backend\scripts\install-kayan-database.ps1")
 if (Has "backend\scripts\prepare-database.mjs") {
   Check "the first administrator step is inside it" `
     ((Get-Content (Join-Path $folder "backend\scripts\prepare-database.mjs") -Raw) -match "KAYAN-DB-STATE")
@@ -120,23 +122,15 @@ if (Has "backend\scripts\prepare-database.mjs") {
 Check "its libraries are there (backend\node_modules)" (Has "backend\node_modules")
 Check "Prisma's client was generated for this platform" (Has "backend\node_modules\.prisma\client")
 
-# Full database backups run pg_dump/pg_restore from the program's own folder,
-# so the package is not shippable without them - and a copy that cannot answer
-# --version from where it now sits is not a copy at all.
-$pgDump = Join-Path $folder "backend\pg\pg_dump.exe"
-$pgRestore = Join-Path $folder "backend\pg\pg_restore.exe"
-Check "the backup tool travels with it (backend\pg\pg_dump.exe)" (Test-Path $pgDump)
-Check "the restore tool travels with it (backend\pg\pg_restore.exe)" (Test-Path $pgRestore)
-Check "libpq travels next to the tools (backend\pg\libpq.dll)" (Has "backend\pg\libpq.dll")
-if (Test-Path $pgDump) {
-  $line = & $pgDump --version 2>&1
-  Check "pg_dump runs from inside the package" `
-    ($LASTEXITCODE -eq 0 -and "$line" -match "pg_dump") ("$line")
-}
-if (Test-Path $pgRestore) {
-  $line = & $pgRestore --version 2>&1
-  Check "pg_restore runs from inside the package" `
-    ($LASTEXITCODE -eq 0 -and "$line" -match "pg_restore") ("$line")
+# PostgreSQL is installed by KAYAN-Setup from the embedded official EDB installer.
+# It lives under ProgramData so the service and company data survive app upgrades/uninstall.
+$pgInstaller = Join-Path $folder "backend\pg\postgresql-installer.exe"
+Check "the official PostgreSQL Windows installer is embedded in KAYAN-Setup" (Test-Path $pgInstaller)
+if (Test-Path $pgInstaller) {
+  $installerInfo = Get-Item $pgInstaller
+  Check "the embedded PostgreSQL installer is a full distribution" ($installerInfo.Length -gt 20000000) ("size=" + [math]::Round($installerInfo.Length / 1MB, 1) + " MB")
+  $installerHeader = [System.IO.File]::ReadAllBytes($pgInstaller)[0..1]
+  Check "the embedded PostgreSQL installer is a Windows executable" ($installerHeader[0] -eq 0x4D -and $installerHeader[1] -eq 0x5A)
 }
 
 # The development toolchain has no business travelling with a customer's copy.

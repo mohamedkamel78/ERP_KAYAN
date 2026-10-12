@@ -73,7 +73,8 @@ class KayanDatabaseConfig {
   const KayanDatabaseConfig._();
 
   static const String host = '127.0.0.1';
-  static const int port = 5432;
+  static const int port = 5433;
+  static const int legacyPort = 5432;
   static const String databaseName = 'erp_kayan';
   static const String username = 'erp_app';
   static const String adminUsername = 'postgres';
@@ -84,7 +85,7 @@ class KayanDatabaseConfig {
     final uri = Uri.tryParse(url);
     if (uri == null) return false;
     return uri.host == host &&
-        uri.port == port &&
+        (uri.port == port || uri.port == legacyPort) &&
         uri.pathSegments.isNotEmpty &&
         uri.pathSegments.first == databaseName;
   }
@@ -116,15 +117,19 @@ class KayanDatabaseConfig {
     String? errorCode,
   }) {
     if (!serviceExists) {
-      return 'PostgreSQL is not running on $host:$port. Start the configured PostgreSQL service before starting the app.';
+      return 'خدمة قاعدة البيانات PostgreSQL غير مشغلة على $host:$port.\n'
+          'تأكد من بدء خدمة KAYAN_PostgreSQL في إدارة الخدمات (services.msc) ثم أعد تشغيل البرنامج.\n'
+          'PostgreSQL is not running on $host:$port. Start the configured PostgreSQL service before starting the app.';
     }
     if (!authenticationOk) {
       final code = errorCode == null ? '' : ' ($errorCode)';
-      final path = settingsPath ?? 'the desktop settings file';
-      return 'PostgreSQL rejected the saved credentials$code. Check '
+      final path = settingsPath ?? 'the desktop settings file (%APPDATA%\\KAYAN-ERP\\kayan.env)';
+      return 'فشلت مصادقة قاعدة البيانات$code. بيانات المستخدم erp_app غير مقبولة على $host:$port.\n'
+          'PostgreSQL rejected the saved credentials$code. Check '
           'DATABASE_URL and ADMIN_DATABASE_URL in $path, then restart the app.';
     }
-    return 'PostgreSQL is not reachable on $host:$port.';
+    return 'قاعدة البيانات غير متاحة على $host:$port.\n'
+        'PostgreSQL is not reachable on $host:$port.';
   }
 }
 
@@ -355,9 +360,15 @@ class LocalBackend {
         [layout.entryPoint],
         workingDirectory: layout.backendDirectory,
         environment: {
+          // Backups belong with the machine's other data, never inside the
+          // program folder: a copy installed under Program Files is not
+          // writable, and the folder is replaced on update. This matches
+          // what the package README promises about %APPDATA%. A value the
+          // user wrote into kayan.env wins over this default.
+          'KAYAN_BACKUP_DIR': '${layout.dataDirectory.path}'
+              '${Platform.pathSeparator}backups',
           ...settings.asEnvironment(port),
-          // The desktop server is private to this machine.
-          'HOST': '127.0.0.1',
+          'HOST': settings.asEnvironment(port)['HOST'] ?? '0.0.0.0',
           'NODE_ENV': 'production',
           // The server writes to a file, where escape sequences are noise.
           'NO_COLOR': '1',
@@ -650,6 +661,20 @@ class BackendLayout {
   File get settingsFile {
     final override = Platform.environment['KAYAN_DESKTOP_SETTINGS'];
     if (override != null && override.isNotEmpty) return File(override);
+    // The elevated installer writes the machine's connection settings to
+    // ProgramData so the ordinary Windows user launching the app reads the
+    // exact same credentials. Prefer that file when present; keep per-user
+    // fallback for developer/test first runs and non-installed copies.
+    if (Platform.isWindows) {
+      final programData = Platform.environment['ProgramData'];
+      if (programData != null && programData.isNotEmpty) {
+        final machineFile = File(
+          '$programData${Platform.pathSeparator}KAYAN-ERP'
+          '${Platform.pathSeparator}kayan.env',
+        );
+        if (machineFile.existsSync()) return machineFile;
+      }
+    }
     return File('${dataDirectory.path}${Platform.pathSeparator}kayan.env');
   }
 
@@ -814,14 +839,15 @@ class RuntimeSettings {
   final int port;
 
   static const Map<String, String> _defaults = {
-    'HOST': '127.0.0.1',
+    'HOST': '0.0.0.0',
+    'PORT': '3000',
     'NODE_ENV': 'production',
     'JWT_ACCESS_TTL': '900',
     'JWT_REFRESH_TTL': '1209600',
     'DATABASE_URL':
-        'postgresql://erp_app:postgres@127.0.0.1:5432/erp_kayan?schema=public',
+        'postgresql://erp_app:postgres@127.0.0.1:5433/erp_kayan?schema=public',
     'ADMIN_DATABASE_URL':
-        'postgresql://postgres:postgres@127.0.0.1:5432/postgres',
+        'postgresql://postgres@127.0.0.1:5433/postgres',
   };
 
   static Future<RuntimeSettings> load(BackendLayout layout, int port) async {
@@ -861,8 +887,13 @@ class RuntimeSettings {
 # the program reads and writes. The defaults match a PostgreSQL installed on
 # this machine with the setup scripts in the project.
 #
+# To allow other computers/devices on the company LAN to connect, HOST is set
+# to 0.0.0.0. To restrict access to this computer only, set HOST="127.0.0.1".
+#
 # After editing, close the program completely and open it again.
 
+HOST="0.0.0.0"
+PORT=3000
 DATABASE_URL="${_defaults['DATABASE_URL']}"
 ADMIN_DATABASE_URL="${_defaults['ADMIN_DATABASE_URL']}"
 JWT_ACCESS_SECRET="${secret()}"
@@ -877,7 +908,7 @@ JWT_REFRESH_TTL=1209600
   Map<String, String> asEnvironment(int chosenPort) => {
     ..._values,
     'PORT': '$chosenPort',
-    'HOST': _values['HOST'] ?? '127.0.0.1',
+    'HOST': _values['HOST'] ?? '0.0.0.0',
   };
 
   String? get databaseUrl => _values['DATABASE_URL'];
