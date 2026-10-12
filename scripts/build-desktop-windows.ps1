@@ -403,7 +403,7 @@ The installer uses port 5433 for the local KAYAN_PostgreSQL service and port
 and domain networks.
 
 No separate Node.js, Flutter, Git, npm or PostgreSQL installation is needed.
-Uninstalling the application preserves the database service and company data.
+Uninstalling stops and unregisters the database service but preserves the company database in %ProgramData%\KAYAN-ERP for reinstall.
 
 If the server does not start, read:
     %APPDATA%\KAYAN-ERP\logs\backend.log

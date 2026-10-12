@@ -94,7 +94,9 @@ Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""KAYAN E
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Preserve the database service and all company data on uninstall.
+; Unregister the service before its executable is removed. The script preserves
+; %ProgramData%\KAYAN-ERP\pgdata and the protected runtime configuration.
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\backend\scripts\manage-kayan-db.ps1"" -Action uninstall"; Flags: runhidden waituntilterminated
 Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""KAYAN ERP Server"""; Flags: runhidden
 
 [UninstallDelete]
