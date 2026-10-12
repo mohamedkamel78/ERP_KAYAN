@@ -214,9 +214,7 @@ The packaged program carries `pg_dump`/`pg_restore` (+ their DLLs) inside
 newest first, and refuses to finish if the copies cannot answer `--version`.
 On a machine with neither, `scripts/build-desktop-windows.ps1` provisions the
 same portable toolchain itself (same download and folder as the installer
-script; tools only — no service, no data folder). The Windows packaging
-workflow installs Inno Setup and fails unless **both** deliverables exist:
-`KAYAN-ERP-windows.zip` and `KAYAN-ERP-Setup-1.0.0.exe`.
+script; tools only — no service, no data folder). The Windows packaging workflow installs Inno Setup and publishes exactly one customer deliverable: `KAYAN-Setup.exe`; the assembled folder is intermediate only and no ZIP is created or uploaded.
 `scripts/verify-package.ps1` checks the same at packaging time. At runtime the
 lookup order is: `KAYAN_PG_DUMP`/`KAYAN_PG_RESTORE` → `backend\pg` (the
 package's own copy) → the portable toolchain → `PATH` → installed PostgreSQL;
