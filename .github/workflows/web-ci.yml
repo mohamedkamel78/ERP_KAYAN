@@ -247,7 +247,7 @@ jobs:
             # the page looked like. Getting this the wrong way round is how
             # a run filled its quota with the login screen and dropped the
             # verdict.
-            grep -E "^(FAIL|DIED|HTTP)|checks passed|the browser check itself broke" /tmp/browser.txt \
+            grep -E "^(FAIL|DIED|HTTP|AUTH|STORAGE)|checks passed|the browser check itself broke" /tmp/browser.txt \
               | head -12 | while IFS= read -r line; do
                 echo "::error::$line"
               done

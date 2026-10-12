@@ -176,6 +176,34 @@ async function main() {
     page.on('error', (error) => log(`DIED the page crashed: ${error.message}`));
     page.on('close', () => log('DIED the page was closed'));
 
+    // How many calls to the server carried a credential, and what the page
+    // was allowed to keep. Both are counted rather than printed: the header
+    // itself must never be written down, and a list of storage keys says
+    // whether the token was saved without saying what it was.
+    const apiCalls = { total: 0, withToken: 0, without: [] };
+    page.on('request', (request) => {
+      if (!/\/api\/v1\//.test(request.url())) return;
+      apiCalls.total += 1;
+      if (request.headers()['authorization']) apiCalls.withToken += 1;
+      else if (apiCalls.without.length < 3) {
+        apiCalls.without.push(`${request.method()} ${request.url()}`);
+      }
+    });
+
+    /** One line saying whether the signed-in session reached the server. */
+    const reportAuth = async (when) => {
+      log(
+        `AUTH ${when}: ${apiCalls.withToken} of ${apiCalls.total} calls to the server carried a token` +
+          (apiCalls.without.length
+            ? `; the first without one: ${apiCalls.without.join(' | ')}`
+            : ''),
+      );
+      const keys = await page
+        .evaluate(() => Object.keys(window.localStorage).join(', '))
+        .catch(() => '(the page would not say)');
+      log(`STORAGE ${when}: ${keys || 'nothing kept'}`);
+    };
+
     const consoleErrors = [];
     page.on('pageerror', (error) => {
       consoleErrors.push(`pageerror: ${error.message}`);
@@ -555,6 +583,7 @@ async function main() {
     }
     await wait(9000);
     await shot('03-after-signin');
+    await reportAuth('after sign-in');
     const at = page.url();
     check(
       'sign in opens the workspace',
