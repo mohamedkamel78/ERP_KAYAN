@@ -13,6 +13,10 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(new URL('../backend/package.json', import.meta.url));
+const argon2 = require('argon2');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(here, '..');
@@ -622,8 +626,15 @@ export function generateDemoBackup() {
   };
 }
 
-// Generate and write file
+// Generate and verify the demo login hashes with the same Argon2 library the
+// real authentication endpoint uses. This prevents shipping a backup whose
+// user rows exist but whose password hashes can never be used to sign in.
 const backup = generateDemoBackup();
+for (const user of backup.tables.user) {
+  if (!(await argon2.verify(user.passwordHash, 'KayanDemo@123'))) {
+    throw new Error('Demo password hash is invalid for user ' + user.username);
+  }
+}
 const outDir = join(rootDir, 'backend', 'dist-demo');
 mkdirSync(outDir, { recursive: true });
 
