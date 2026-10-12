@@ -248,10 +248,10 @@ async function main() {
           JSON.stringify(labels, null, 2),
         );
         const names = labels
-          .map((node) => node.label || node.text)
+          .map((node) => `${node.label || node.text}[${node.role}]`)
           .filter(Boolean);
-        for (let index = 0; index < names.length; index += 8) {
-          console.log(`LABELS ${step}: ${names.slice(index, index + 8).join(' | ')}`);
+        for (let index = 0; index < names.length; index += 6) {
+          console.log(`LABELS ${step}: ${names.slice(index, index + 6).join(' | ')}`);
         }
         const inputs = await page.$$eval('input', (nodes) =>
           nodes.map((node) => ({
@@ -312,15 +312,24 @@ async function main() {
             if (!needles.some((needle) => lower.includes(needle))) continue;
             const rect = node.getBoundingClientRect();
             if (rect.width <= 0 || rect.height <= 0) continue;
+            const role = node.getAttribute('role') || '';
             matches.push({
               x: rect.x + rect.width / 2,
               y: rect.y + rect.height / 2,
               area: rect.width * rect.height,
+              isControl: /^(button|menuitem|tab|link|textbox|checkbox|switch|radio)$/i.test(role),
+              role,
               label: label.trim().slice(0, 40),
             });
           }
-          matches.sort((a, b) => a.area - b.area);
-          return matches;
+          // A screen can say the same words twice - the login screen has a
+          // heading "Sign in" and a button "Sign in". The one that can be
+          // pressed says so, so the controls are preferred over the plain
+          // text before the smallest is chosen.
+          const controls = matches.filter((match) => match.isControl);
+          const pool = controls.length > 0 ? controls : matches;
+          pool.sort((a, b) => a.area - b.area);
+          return pool;
         },
         wanted,
         roles,
@@ -399,6 +408,42 @@ async function main() {
     // Flutter web keeps a real <input> element for each text field, so the
     // credentials are typed into those rather than into a guessed point on
     // the screen. The labelled-node route stays as the fallback.
+    /** Every value the text fields currently hold, empty ones left out. */
+    const fieldValues = () =>
+      page.$$eval('input', (nodes) =>
+        nodes.map((node) => node.value ?? '').filter((value) => value !== ''),
+      );
+
+    /**
+     * Puts one value into the field at [box].
+     *
+     * Typing into a canvas-drawn field loses the first keystroke often
+     * enough to matter - the click that focuses the field is still being
+     * handled when the first character arrives. So each attempt starts by
+     * emptying the field, types slowly, and then reads the value back: what
+     * is asserted is not that keys were pressed but that the field holds
+     * what it should.
+     */
+    async function typeIntoField(box, value) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        await page.mouse.click(box.x, box.y);
+        await wait(300);
+        await page.keyboard.down('Control');
+        await page.keyboard.press('KeyA');
+        await page.keyboard.up('Control');
+        await page.keyboard.press('Backspace');
+        await wait(120);
+        await page.keyboard.type(value, { delay: 40 });
+        await wait(150);
+        const values = await fieldValues();
+        if (values.includes(value)) return true;
+        console.log(
+          `INPUTS attempt ${attempt + 1} put ${JSON.stringify(values)} in the fields, not "${value}"`,
+        );
+      }
+      return false;
+    }
+
     async function typeIntoFields(values) {
       const inputs = await page.$$('input');
       const usable = [];
@@ -416,16 +461,11 @@ async function main() {
         // Flutter's text fields are drawn on the canvas; the <input> is a
         // real element sitting on top of them, and a synthetic click on it
         // does not always land. Clicking where it is does.
-        await page.mouse.click(usable[index].box.x, usable[index].box.y);
-        await page.keyboard.type(values[index], { delay: 20 });
+        const ok = await typeIntoField(usable[index].box, values[index]);
+        if (!ok) return false;
       }
-      const filled = await page.$$eval('input', (nodes) =>
-        nodes.map((node) => node.value ?? ''),
-      );
-      console.log(
-        `INPUTS typed: ${JSON.stringify(filled.filter((value) => value !== ''))}`,
-      );
-      return filled.filter((value) => value !== '').length >= values.length;
+      console.log(`INPUTS typed: ${JSON.stringify(await fieldValues())}`);
+      return true;
     }
 
     let typed =
@@ -442,9 +482,19 @@ async function main() {
 
     const beforeLoginResponse = responses.length;
     await clickNamed(['تسجيل الدخول', 'Sign in'], { step: 'signin-button' });
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
       if (!/login|signin|setup/.test(page.url())) break;
       await wait(1000);
+    }
+    if (/login|signin|setup/.test(page.url())) {
+      // A form that is filled in usually submits on Enter too. Trying it is
+      // cheaper than a run that reports a sign-in it never attempted.
+      console.log('LOGIN the button did not move the page; trying Enter');
+      await page.keyboard.press('Enter');
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        if (!/login|signin|setup/.test(page.url())) break;
+        await wait(1000);
+      }
     }
     const loginResponse = responses
       .slice(beforeLoginResponse)
