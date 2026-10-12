@@ -393,48 +393,29 @@ Write-Host "      verified $windowsNativeCount Windows native binaries: all x64 
 # ------------------------------------------------------------- 6. notes
 Step "7/8" "Writing the note that travels with the program"
 $note = @"
-KAYAN ERP - Windows desktop copy
-================================
+KAYAN ERP - Windows installer
+=============================
 
-To run the program, double-click:   erp_kayan.exe
+Install KAYAN-Setup.exe. The installer provisions the dedicated local
+PostgreSQL service and configures the application automatically.
 
-The program starts its own server on this machine. No terminal, no Node.js,
-no commands.
+Runtime database settings:
+    %ProgramData%\KAYAN-ERP\kayan.env
+This file is protected by Windows ACL for the installing user, SYSTEM and
+local Administrators. Do not share it.
 
-What this copy needs on the machine
------------------------------------
-1. KAYAN Setup installs and starts its dedicated PostgreSQL service automatically.
-   Runtime settings are written to:
-       %ProgramData%\KAYAN-ERP\kayan.env
-   The file ACL is restricted to the installing Windows user, SYSTEM and local
-   Administrators. Logs and company JSON backups remain under:
-       %APPDATA%\KAYAN-ERP\
-   The database service and company data are preserved when the app is uninstalled.
+Application logs and JSON company backups:
+    %APPDATA%\KAYAN-ERP\
 
-2. That is all. Node.js, Flutter, Git and a separate PostgreSQL installation are NOT needed.
+The installer uses port 5433 for the local KAYAN_PostgreSQL service and port
+3000 for the application API. The Windows Firewall rule is limited to private
+and domain networks.
 
-If the program reports that the server did not start
-----------------------------------------------------
-Read the log, which is written to:
+No separate Node.js, Flutter, Git, npm or PostgreSQL installation is needed.
+Uninstalling the application preserves the database service and company data.
+
+If the server does not start, read:
     %APPDATA%\KAYAN-ERP\logs\backend.log
-The most common cause is PostgreSQL not running. Start it, then reopen the
-program.
-
-What is inside this folder
---------------------------
-erp_kayan.exe          the program itself
-data\                  its screens and translations
-backend\dist\          the API server
-backend\node_modules\  the server's libraries
-backend\prisma\        the database schema and its migrations
-backend\scripts\       the step that prepares the database
-backend\node\node.exe  the Node runtime the server runs on
-backend\pg\            pg_dump and pg_restore for full database backups
-icons\                  the KAYAN logo: app_icon.ico (the icon of the program
-                        and of its shortcuts) and Kayan.png (the source)
-
-Nothing in this folder is a secret. Protected database settings live in
-%ProgramData%\KAYAN-ERP\kayan.env; logs and backups live in %APPDATA%\KAYAN-ERP\.
 "@
 Set-Content -Path (Join-Path $appFolder "README.txt") -Value $note -Encoding UTF8
 
