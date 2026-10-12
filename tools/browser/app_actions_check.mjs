@@ -115,7 +115,7 @@ function writeJobSummary() {
     const passed = results.filter((r) => r.ok).length;
     const failures = results.filter((r) => !r.ok);
     const seen = consoleLines
-      .filter((line) => /^(NAV|HTTP|FILE|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|DOWNLOAD|pageerror|console)/.test(line))
+      .filter((line) => /^(NAV|HTTP|FILE|TRAFFIC|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|DOWNLOAD|pageerror|console)/.test(line))
       .slice(-18);
     const block = [
       SUMMARY_MARKER,
@@ -264,6 +264,33 @@ async function main() {
         post: request.postData(),
       }),
     );
+
+    // What the program asked the server for, counted.
+    //
+    // A button that does nothing and a client that is stuck in a loop look
+    // identical from the outside until somebody counts the requests. This is
+    // that count: every call under /api/v1, grouped by the path without its
+    // query, so `the reports screen asked for the trial balance 40 times` is a
+    // line in the log rather than a mystery in the rate limiter.
+    const traffic = new Map();
+    page.on('request', (request) => {
+      const url = request.url();
+      const at = url.indexOf('/api/v1/');
+      if (at === -1) return;
+      const path = url.slice(at).split('?')[0];
+      const key = `${request.method()} ${path}`;
+      traffic.set(key, (traffic.get(key) ?? 0) + 1);
+    });
+
+    /** The busiest routes, as one line: `GET /api/v1/health x12, ...`. */
+    const trafficNote = (limit = 8) =>
+      [...traffic.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([route, count]) => `${route} x${count}`)
+        .join(', ') || 'no API call was seen';
+
+    const trafficTotal = () => [...traffic.values()].reduce((a, b) => a + b, 0);
 
     // Every request the program made that came back refused, with the route
     // that refused it. A button that downloads nothing and a page that shows
@@ -755,7 +782,7 @@ async function main() {
       arrived.map((item) => item.suggested).join(', ') ||
         (excelAnswer
           ? `the browser was handed ${excelAnswer.size} bytes of ${excelAnswer.type}`
-          : `nothing arrived - ${refusedNote()}`),
+          : `nothing arrived - ${refusedNote()}; traffic: ${trafficNote(4)}`),
     );
     if (arrived.length) {
       const bytes = bytesOf(arrived[arrived.length - 1]);
@@ -917,6 +944,14 @@ async function main() {
     }
 
     // ───────────────────────────────────────────────────────── summary
+    log(`TRAFFIC ${trafficTotal()} API call(s): ${trafficNote(10)}`);
+    if (trafficTotal() > 120) {
+      log(
+        `TRAFFIC warning: ${trafficTotal()} calls for one visit through four ` +
+          'screens is a client that is asking again, not a person clicking. ' +
+          'Behind the rate limiter this is what turns a button into nothing.',
+      );
+    }
     await shot('10-final');
     check(
       'the page raised no uncaught errors of its own',

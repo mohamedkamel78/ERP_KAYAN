@@ -208,6 +208,17 @@ jobs:
           DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
           KAYAN_WEB_ROOT: ${{ github.workspace }}/web
           KAYAN_BACKUP_DIR: /tmp/kayan-backups
+          # One browser on one runner is one IP address, and the limiter counts
+          # per address - so a job that drives a real session through four
+          # screens spends the allowance a whole office shares on its own. The
+          # ceiling is lifted here for that reason and for no other: the limiter
+          # itself is what `rate-limit.guard.spec.ts` and the API job measure,
+          # and what this job measures is whether a button hands over a file.
+          # The traffic line the check prints (`TRAFFIC n call(s): ...`) is what
+          # says whether a high number here is the job or a client that asks
+          # again, and the check reports it either way.
+          RATE_LIMIT_MAX: "3000"
+          RATE_LIMIT_AUTH_MAX: "600"
           # Without these the program cannot sign a token, and the very
           # first thing the browser asks it to do is sign one. They are
           # throwaway values for a throwaway database.
@@ -257,7 +268,7 @@ jobs:
             # the verdict, is the shape that survives.
             verdict=$(
               {
-                grep -E "^(FAIL|NAV|FILE|HTTP|SERVER|SCREEN|LABELS missed|the browser check)" /tmp/browser.txt | tail -16
+                grep -E "^(FAIL|NAV|FILE|HTTP|TRAFFIC|SERVER|SCREEN|LABELS missed|the browser check)" /tmp/browser.txt | tail -16
                 grep -E "checks passed" /tmp/browser.txt | tail -1
                 # A 500 the server logged is worth more than any guess about
                 # one: the stack that followed it says which line failed.
