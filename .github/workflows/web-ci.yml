@@ -252,6 +252,12 @@ jobs:
               | grep -A 8 "Unhandled exception" | tail -20 \
               | paste -sd'|' | fold -w 2500 | head -2 \
               | while IFS= read -r line; do echo "::error title=server log::$line"; done
+            # What the server itself said about backups and restores, in the
+            # order it said it: which files it wrote, kept and read.
+            sed -r 's/\x1b\[[0-9;]*m//g' /tmp/kayan-server.log \
+              | grep -iE "backup|restor|safety|dump" | tail -30 \
+              | paste -sd'|' | fold -w 2500 | head -2 \
+              | while IFS= read -r line; do echo "::error title=server log: backups and restores::$line"; done
             exit "$status"
           fi
 
