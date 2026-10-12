@@ -4,7 +4,10 @@ import 'dart:io';
 import 'package:erp_kayan/core/backend/backend_gate.dart';
 import 'package:erp_kayan/core/backend/local_backend.dart';
 import 'package:erp_kayan/core/backend/local_backend_io.dart' as io;
+import 'package:erp_kayan/core/config/app_config.dart';
 import 'package:erp_kayan/features/auth/presentation/providers/auth_providers.dart';
+import 'package:erp_kayan/features/data/presentation/providers/data_providers.dart'
+    as data;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -44,8 +47,45 @@ void main() {
   );
 
   testWidgets(
-    'BackendGate injects local server baseUrl into auth apiClientProvider so login succeeds on dynamic port',
+    'BackendGate injects local server baseUrl into both auth apiClientProvider and data appConfigProvider',
     (tester) async {
+      const dynamicBaseUrl = 'http://127.0.0.1:3010/api/v1';
+      debugOwnsItsBackendOverride = true;
+      debugEnsureRunningOverride = ({required String appDisplayName}) async =>
+          const LocalBackendStatus.ready(dynamicBaseUrl);
+
+      String? authConfigUrl;
+      String? dataConfigUrl;
+      String? dioBaseUrl;
+
+      await tester.pumpWidget(
+        BackendGate(
+          child: Consumer(
+            builder: (context, ref, _) {
+              authConfigUrl = ref.watch(appConfigProvider).apiBaseUrl;
+              dataConfigUrl = ref.watch(data.appConfigProvider).apiBaseUrl;
+              dioBaseUrl = ref.watch(apiClientProvider).raw.options.baseUrl;
+              return MaterialApp(
+                home: Scaffold(
+                  body: Text('BASE:$dioBaseUrl'),
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(authConfigUrl, equals(dynamicBaseUrl));
+      expect(dataConfigUrl, equals(dynamicBaseUrl));
+      expect(dioBaseUrl, equals(dynamicBaseUrl));
+      expect(find.text('BASE:$dynamicBaseUrl'), findsOneWidget);
+    },
+  );
+
+  test(
+    'authControllerProvider signs in against dynamic local server port via overridden appConfigProvider',
+    () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
 
@@ -56,10 +96,7 @@ void main() {
         requestedPaths.add('${request.method} ${request.uri.path}');
         request.response.headers.contentType = ContentType.json;
 
-        if (request.uri.path == '/api/v1/setup/status') {
-          request.response.statusCode = HttpStatus.ok;
-          request.response.write(jsonEncode({'needsSetup': false}));
-        } else if (request.uri.path == '/api/v1/auth/login' &&
+        if (request.uri.path == '/api/v1/auth/login' &&
             request.method == 'POST') {
           final raw = await utf8.decoder.bind(request).join();
           receivedLoginBody = jsonDecode(raw) as Map<String, dynamic>;
@@ -89,60 +126,21 @@ void main() {
       });
 
       final baseUrl = 'http://127.0.0.1:${server.port}/api/v1';
-      debugOwnsItsBackendOverride = true;
-      debugEnsureRunningOverride = ({required String appDisplayName}) async =>
-          LocalBackendStatus.ready(baseUrl);
-
-      String? resolvedApiBaseUrl;
-      String? signInError;
-      var signedIn = false;
-
-      await tester.pumpWidget(
-        BackendGate(
-          child: Consumer(
-            builder: (context, ref, _) {
-              resolvedApiBaseUrl = ref.watch(appConfigProvider).apiBaseUrl;
-              return MaterialApp(
-                home: Scaffold(
-                  body: Column(
-                    children: [
-                      Text('BASE:$resolvedApiBaseUrl'),
-                      if (signedIn) const Text('SIGNED_IN_OK'),
-                      if (signInError != null) Text('ERR:$signInError'),
-                      ElevatedButton(
-                        onPressed: () async {
-                          final result = await ref
-                              .read(authControllerProvider.notifier)
-                              .signIn(
-                                username: 'admin',
-                                password: 'AdminPassword123',
-                              );
-                          result.when(
-                            success: (_) => signedIn = true,
-                            failure: (f) => signInError = f.message,
-                          );
-                          (context as Element).markNeedsBuild();
-                        },
-                        child: const Text('DO_LOGIN'),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
+      final container = ProviderContainer(
+        overrides: [
+          appConfigProvider.overrideWithValue(
+            AppConfig.forLocalServer(baseUrl),
           ),
-        ),
+        ],
       );
-      await tester.pumpAndSettle();
+      addTearDown(container.dispose);
 
-      expect(resolvedApiBaseUrl, equals(baseUrl));
-      expect(find.text('BASE:$baseUrl'), findsOneWidget);
+      final result = await container
+          .read(authControllerProvider.notifier)
+          .signIn(username: 'admin', password: 'AdminPassword123');
 
-      await tester.tap(find.text('DO_LOGIN'));
-      await tester.pumpAndSettle();
-
-      expect(signInError, isNull);
-      expect(signedIn, isTrue);
+      expect(result.isSuccess, isTrue);
+      expect(result.valueOrNull?.username, equals('admin'));
       expect(receivedLoginBody?['username'], equals('admin'));
       expect(requestedPaths, contains('POST /api/v1/auth/login'));
     },

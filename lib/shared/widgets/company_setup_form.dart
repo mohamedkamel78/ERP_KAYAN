@@ -373,21 +373,27 @@ class _CompanySetupFormState extends State<CompanySetupForm> {
           ],
         ),
         const SizedBox(height: 20),
-        Row(
+        Wrap(
+          spacing: 16,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Text(
               'شعار الشركة (اختياري) / Company logo (optional)',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
-            const SizedBox(width: 16),
             OutlinedButton.icon(
               onPressed: busy ? null : _pickLogo,
               icon: const Icon(Icons.image_outlined, size: 18),
               label: const Text('اختيار صورة / Choose image'),
             ),
             if (_logo != null) ...[
-              const SizedBox(width: 8),
-              Image.memory(_logo!.bytes, width: 40, height: 40, fit: BoxFit.contain),
+              Image.memory(
+                _logo!.bytes,
+                width: 40,
+                height: 40,
+                fit: BoxFit.contain,
+              ),
               IconButton(
                 tooltip: 'إزالة / Remove',
                 onPressed: busy ? null : () => setState(() => _logo = null),
