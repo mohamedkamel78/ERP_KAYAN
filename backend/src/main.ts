@@ -87,6 +87,9 @@ async function bootstrap() {
     join(process.cwd(), 'build', 'web'),
     join(__dirname, '..', '..', 'build', 'web'),
     join(__dirname, '..', 'web'),
+    join(__dirname, 'web'),
+    join(process.cwd(), 'web'),
+    join(process.cwd(), 'backend', 'web'),
   ].filter(Boolean) as string[];
 
   const webRoot = candidateWebRoots.find((dir) =>

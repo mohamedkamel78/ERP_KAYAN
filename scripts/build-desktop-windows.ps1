@@ -343,6 +343,20 @@ if (-not (Test-Path (Join-Path $release "erp_kayan.exe"))) {
 }
 Copy-Item (Join-Path $release "*") $appFolder -Recurse -Force
 
+Write-Host "      building Flutter Web client for browser and LAN access..."
+flutter build web --release --dart-define=APP_ENV=production
+if ($LASTEXITCODE -eq 0) {
+  $webSource = Join-Path $root "build\web"
+  $webDest = Join-Path $backendFolder "web"
+  if (Test-Path $webSource) {
+    New-Item -ItemType Directory -Force -Path $webDest | Out-Null
+    Copy-Item (Join-Path $webSource "*") $webDest -Recurse -Force
+    Write-Host "      bundled Flutter Web client into backend\web"
+  }
+} else {
+  Write-Host "      warning: flutter build web failed; desktop client still operational"
+}
+
 # Reject any x86, ARM64, malformed, or non-PE Windows native binary before
 # creating distributable artifacts.
 $nativeFiles = Get-ChildItem -Path $appFolder -Recurse -File |
@@ -443,6 +457,10 @@ if ($iscc) {
   if ($LASTEXITCODE -ne 0) { Fail "Inno Setup ran but did not produce the installer." }
   $installer = Join-Path $stage "KAYAN-ERP-Setup-1.0.0.exe"
   Write-Host "      installer written"
+  if (Test-Path $installer) {
+    Copy-Item $installer (Join-Path $stage "KAYAN-Setup.exe") -Force
+    Write-Host "      created alias: KAYAN-Setup.exe"
+  }
 } else {
   Write-Host "      Inno Setup is not on this machine, so no .exe installer was made."
   Write-Host "      The folder and the .zip above are complete and can be copied as they are."

@@ -75,6 +75,21 @@ class _ProfileCardState extends ConsumerState<_ProfileCard> {
   }
 
   @override
+  void didUpdateWidget(_ProfileCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.profile != oldWidget.profile && !_saving) {
+      final p = widget.profile;
+      _code.text = '${p['code'] ?? ''}';
+      _nameAr.text = '${p['nameAr'] ?? ''}';
+      _nameEn.text = '${p['nameEn'] ?? ''}';
+      _taxId.text = '${p['taxId'] ?? ''}';
+      _phone.text = '${p['phone'] ?? ''}';
+      _email.text = '${p['email'] ?? ''}';
+      _address.text = '${p['address'] ?? ''}';
+    }
+  }
+
+  @override
   void dispose() {
     _code.dispose();
     _nameAr.dispose();
@@ -102,6 +117,9 @@ class _ProfileCardState extends ConsumerState<_ProfileCard> {
     if (!mounted) return;
     setState(() => _saving = false);
     final l10n = context.l10n;
+    if (error == null) {
+      ref.invalidate(companyProfileProvider);
+    }
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(error ?? l10n.profileSaved)));
   }

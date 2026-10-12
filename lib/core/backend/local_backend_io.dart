@@ -821,7 +821,7 @@ class RuntimeSettings {
   final int port;
 
   static const Map<String, String> _defaults = {
-    'HOST': '127.0.0.1',
+    'HOST': '0.0.0.0',
     'NODE_ENV': 'production',
     'JWT_ACCESS_TTL': '900',
     'JWT_REFRESH_TTL': '1209600',
@@ -868,8 +868,13 @@ class RuntimeSettings {
 # the program reads and writes. The defaults match a PostgreSQL installed on
 # this machine with the setup scripts in the project.
 #
+# To allow other computers/devices on the company LAN to connect, HOST is set
+# to 0.0.0.0. To restrict access to this computer only, set HOST="127.0.0.1".
+#
 # After editing, close the program completely and open it again.
 
+HOST="0.0.0.0"
+PORT=3000
 DATABASE_URL="${_defaults['DATABASE_URL']}"
 ADMIN_DATABASE_URL="${_defaults['ADMIN_DATABASE_URL']}"
 JWT_ACCESS_SECRET="${secret()}"
@@ -884,7 +889,7 @@ JWT_REFRESH_TTL=1209600
   Map<String, String> asEnvironment(int chosenPort) => {
     ..._values,
     'PORT': '$chosenPort',
-    'HOST': _values['HOST'] ?? '127.0.0.1',
+    'HOST': _values['HOST'] ?? '0.0.0.0',
   };
 
   String? get databaseUrl => _values['DATABASE_URL'];

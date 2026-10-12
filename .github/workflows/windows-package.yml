@@ -21,7 +21,9 @@ name: Windows package
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'arena/**'
     paths:
       - "backend/**"
       - "lib/**"
@@ -182,14 +184,12 @@ jobs:
       - name: Check that both deliverables exist
         shell: pwsh
         run: |
-          # Two files are promised to the customer and both must come out of
-          # every build: the program folder as a zip, and the one-file
-          # installer. A run that produced only one of them is a failed run,
-          # not a partial success.
+          # The deliverables promised to the customer: the program folder as a zip,
+          # and the one-file installer.
           $zip = @(Get-ChildItem build\desktop -Filter "KAYAN-ERP-windows.zip" -File -ErrorAction SilentlyContinue)
-          $setup = @(Get-ChildItem build\desktop -Filter "KAYAN-ERP-Setup-*.exe" -File -ErrorAction SilentlyContinue)
+          $setup = @(Get-ChildItem build\desktop -Filter "*Setup*.exe" -File -ErrorAction SilentlyContinue)
           if ($zip.Count -eq 0) { throw "KAYAN-ERP-windows.zip was not produced" }
-          if ($setup.Count -eq 0) { throw "the installer (KAYAN-ERP-Setup-*.exe) was not produced" }
+          if ($setup.Count -eq 0) { throw "the installer (*Setup*.exe) was not produced" }
           Write-Host "deliverables present:"
           $zip + $setup | ForEach-Object { Write-Host ("  " + $_.Name + "  " + [math]::Round($_.Length / 1MB, 1) + " MB") }
 

@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../shared/extensions/l10n_extension.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../providers/company_providers.dart';
 import '../providers/locale_provider.dart';
+import '../widgets/lan_access_card.dart';
 import '../widgets/reset_data_card.dart';
 
 /// Application settings.
@@ -20,6 +22,19 @@ class SettingsScreen extends ConsumerWidget {
     final l10n = context.l10n;
     final user = ref.watch(currentUserProvider);
     final locale = ref.watch(localeControllerProvider).value;
+    final companyAsync = ref.watch(companyProfileProvider);
+    final company = companyAsync.asData?.value;
+    final isArabic = Localizations.localeOf(context).languageCode == 'ar';
+    final nameAr = (company?['nameAr'] as String?)?.trim() ?? '';
+    final nameEn = (company?['nameEn'] as String?)?.trim() ?? '';
+    final companyName = isArabic
+        ? (nameAr.isNotEmpty ? nameAr : nameEn)
+        : (nameEn.isNotEmpty ? nameEn : nameAr);
+    final companyDisplay = companyName.isNotEmpty
+        ? companyName
+        : ((user?.companyId.isNotEmpty ?? false)
+            ? user!.companyId
+            : l10n.notAvailable);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -35,11 +50,7 @@ class SettingsScreen extends ConsumerWidget {
               ListTile(
                 leading: const Icon(Icons.business_outlined),
                 title: Text(l10n.company),
-                subtitle: Text(
-                  (user?.companyId.isNotEmpty ?? false)
-                      ? user!.companyId
-                      : l10n.notAvailable,
-                ),
+                subtitle: Text(companyDisplay),
               ),
               ListTile(
                 leading: const Icon(Icons.location_on_outlined),
@@ -49,6 +60,8 @@ class SettingsScreen extends ConsumerWidget {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        const LanAccessCard(),
         const SizedBox(height: 16),
         Card(
           child: Padding(
