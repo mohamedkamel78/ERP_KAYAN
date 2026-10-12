@@ -661,6 +661,20 @@ class BackendLayout {
   File get settingsFile {
     final override = Platform.environment['KAYAN_DESKTOP_SETTINGS'];
     if (override != null && override.isNotEmpty) return File(override);
+    // The elevated installer writes the machine's connection settings to
+    // ProgramData so the ordinary Windows user launching the app reads the
+    // exact same credentials. Prefer that file when present; keep per-user
+    // fallback for developer/test first runs and non-installed copies.
+    if (Platform.isWindows) {
+      final programData = Platform.environment['ProgramData'];
+      if (programData != null && programData.isNotEmpty) {
+        final machineFile = File(
+          '${programData}${Platform.pathSeparator}KAYAN-ERP'
+          '${Platform.pathSeparator}kayan.env',
+        );
+        if (machineFile.existsSync()) return machineFile;
+      }
+    }
     return File('${dataDirectory.path}${Platform.pathSeparator}kayan.env');
   }
 
