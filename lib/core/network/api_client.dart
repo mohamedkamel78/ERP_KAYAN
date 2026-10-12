@@ -66,12 +66,21 @@ class ApiClient {
                 // The renewal worked but the request itself did not; the
                 // original failure is the one worth reporting.
               }
-            } else {
+            } else if (!_expiryAnnounced) {
+              _expiryAnnounced = true;
               await _tokenStore.clear();
               await onSessionExpired?.call();
             }
           }
           handler.next(e);
+        },
+        onResponse: (response, handler) {
+          // A request that worked means there is a session again, so the next
+          // one that runs out is worth announcing. Without this the app would
+          // sign the person out for a refusal that belonged to an earlier
+          // session.
+          _expiryAnnounced = false;
+          handler.next(response);
         },
       ),
     );
@@ -94,6 +103,18 @@ class ApiClient {
   /// wait for it, because spending it twice revokes the first renewal.
   Future<bool>? _renewing;
 
+  /// Whether the current session has already been announced as over.
+  ///
+  /// Ending a session is itself a request — `POST /auth/logout` — and it is
+  /// made with the token that has just been cleared, so it answers `401` like
+  /// any other call would. Left alone, that refusal is read as a second
+  /// expired session, which signs out again: the loop ran 2999 times in one
+  /// minute on a recorded run, spent the whole rate limit of one address, and
+  /// behind it every download, print and report was refused. A refusal that
+  /// ends a session is therefore announced once, and the latch is released by
+  /// the next request that succeeds.
+  bool _expiryAnnounced = false;
+
   static const _skipRenewal = 'skipSessionRenewal';
 
   Dio get raw => _dio;
@@ -103,7 +124,14 @@ class ApiClient {
   /// 403 means "you may not": renewing the session will not change that, and
   /// trying would only add a delay before the same answer.
   bool _isSessionRefusal(DioException e) =>
-      e.response?.statusCode == 401 && e.requestOptions.path != _refreshPath;
+      e.response?.statusCode == 401 &&
+      !_endsOrRenewsTheSession.contains(e.requestOptions.path);
+
+  /// Paths whose `401` cannot be repaired by this client: `/auth/refresh`
+  /// answers for the renewal itself, and `/auth/logout` is what ending the
+  /// session does. See [_expiryAnnounced].
+  static const _endsOrRenewsTheSession = {_refreshPath, _logoutPath};
+  static const _logoutPath = '/auth/logout';
 
   RequestOptions _authorised(RequestOptions options) {
     // The interceptor runs again for the retry and would attach the old

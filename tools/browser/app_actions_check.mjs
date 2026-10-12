@@ -291,6 +291,8 @@ async function main() {
         .join(', ') || 'no API call was seen';
 
     const trafficTotal = () => [...traffic.values()].reduce((a, b) => a + b, 0);
+    const busiestRoute = () =>
+      [...traffic.entries()].sort((a, b) => b[1] - a[1])[0] ?? ['nothing', 0];
 
     // Every request the program made that came back refused, with the route
     // that refused it. A button that downloads nothing and a page that shows
@@ -950,6 +952,19 @@ async function main() {
 
     // ───────────────────────────────────────────────────────── summary
     log(`TRAFFIC ${trafficTotal()} API call(s): ${trafficNote(10)}`);
+    // A person walking through four screens asks the server for a dozen
+    // things. A client that asks for three thousand is a loop, and a loop is
+    // not a detail beside the failures: one run of this check had the app
+    // calling `POST /auth/logout` 2999 times in a minute, which spent the
+    // rate limit that is shared by one address and made the server refuse the
+    // very requests the file buttons depend on. Every "no download arrived"
+    // below was that refusal. So the count is asserted, not observed.
+    const [busiestName, busiestCount] = busiestRoute();
+    check(
+      'the app asks the server a person-sized number of times',
+      trafficTotal() <= 120 && busiestCount <= 30,
+      `${trafficTotal()} calls in all; the loudest was ${busiestName} x${busiestCount}`,
+    );
     if (trafficTotal() > 120) {
       log(
         `TRAFFIC warning: ${trafficTotal()} calls for one visit through four ` +
