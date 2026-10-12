@@ -323,8 +323,11 @@ Future<PickedFile?> pickFile({List<String> extensions = const []}) async {
   // focus again, with no file on the input, means the same thing. Both paths
   // end with null; a second attempt to finish is ignored.
   input.addEventListener('cancel', (_) => finish(null));
+  input.addEventListener('change', (_) {
+    if (input.files == null || input.files!.isEmpty) finish(null);
+  });
   focusSubscription = html.window.onFocus.listen((_) {
-    Timer(const Duration(milliseconds: 400), () {
+    Timer(const Duration(milliseconds: 300), () {
       if (!finished && (input.files == null || input.files!.isEmpty)) {
         finish(null);
       }

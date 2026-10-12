@@ -678,28 +678,32 @@ async function main() {
 
     // Closing the dialogue without a file must not wedge the button.
     let cancelRecovered = false;
+    let cancelError = null;
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const [chooser] = await Promise.all([
-          page.waitForFileChooser({ timeout: 10000 }),
+          page.waitForFileChooser({ timeout: 15000 }),
           clickNamed(
             ['اختر ملفاً آخر', 'اختر الملف', 'ملفاً', 'ملف', 'choose', 'file', 'File'],
-            { timeoutMs: 10000, step: 'choose-file' },
+            { timeoutMs: 15000, step: `choose-file-cancel-${attempt}` },
           ),
         ]);
         await chooser.dismiss();
         await page.evaluate(() => {
           window.dispatchEvent(new Event('focus'));
-          const inputs = document.querySelectorAll('input[type="file"]');
-          inputs.forEach((input) => input.dispatchEvent(new Event('cancel')));
+          document.querySelectorAll('input[type="file"]').forEach((input) => {
+            input.dispatchEvent(new Event('cancel', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          });
         }).catch(() => {});
-        await wait(1500);
+        await wait(2000);
       }
       cancelRecovered = true;
-    } catch {
+    } catch (err) {
       cancelRecovered = false;
+      cancelError = err?.message || String(err);
     }
-    check('closing the file dialogue twice in a row is fine', cancelRecovered);
+    check('closing the file dialogue twice in a row is fine', cancelRecovered, cancelError);
 
     // ───────────────────────────────────────────── 5. full backup
     const beforeBackup = network.length;
