@@ -202,6 +202,7 @@ class ReportLinkBuilder {
     };
     return DownloadRequest(
       url: '$_base/import/templates/$kind?${_encode(query)}',
+      fileName: 'kayan-template-$kind.xlsx',
     );
   }
 

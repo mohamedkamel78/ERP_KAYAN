@@ -632,9 +632,10 @@ async function main() {
     await shot('06-import');
     check('the import entry opens', wentToImport, `at ${page.url()}`);
 
-    const clickedTemplate = await clickNamed(['تنزيل القالب', 'القالب', 'template', 'Template'], {
-      step: 'import-template',
-    });
+    const clickedTemplate = await clickNamed(
+      ['تنزيل القالب', 'تنزيل', 'Download the template', 'Download template'],
+      { step: 'import-template' },
+    );
     const templateArrived = await waitForDownload(beforeTemplate);
     check(
       'the template button downloads a file',
@@ -681,7 +682,10 @@ async function main() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const [chooser] = await Promise.all([
           page.waitForFileChooser({ timeout: 10000 }),
-          clickNamed(['اختر الملف', 'ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
+          clickNamed(
+            ['اختر ملفاً آخر', 'اختر الملف', 'ملفاً', 'ملف', 'choose', 'file', 'File'],
+            { timeoutMs: 10000, step: 'choose-file' },
+          ),
         ]);
         await chooser.dismiss();
         await page.evaluate(() => {
