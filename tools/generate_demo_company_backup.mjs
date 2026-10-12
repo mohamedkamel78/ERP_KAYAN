@@ -5,6 +5,7 @@
  * - format: "kayan-backup"
  * - version: 1
  * - Balanced journal entries (totalDebit === totalCredit)
+ * - Demo login: admin / KayanDemo@123; accountant / KayanDemo@123
  * - Complete Chart of Accounts with parent hierarchy
  * - Branches, fiscal period, roles, users, items, stock, sales, and purchases
  */
@@ -137,7 +138,7 @@ export function generateDemoBackup() {
       email: 'admin@kayan-erp.local',
       fullNameEn: 'System Administrator',
       fullNameAr: 'مدير النظام المالي',
-      passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$demoHashAdmin123$xyz',
+      passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$zjBzVt2OX2fgSMsKrj2UKw$DSc4SpQimkeMakfzd4hPlnsBD/mTeIXfPxWoyBQHqZ4',
       isActive: true,
       isSuperAdmin: true,
       failedLoginCount: 0,
@@ -151,7 +152,7 @@ export function generateDemoBackup() {
       email: 'accountant@kayan-erp.local',
       fullNameEn: 'Chief Accountant',
       fullNameAr: 'محاسب عام',
-      passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$demoHashAcct123$xyz',
+      passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$zjBzVt2OX2fgSMsKrj2UKw$DSc4SpQimkeMakfzd4hPlnsBD/mTeIXfPxWoyBQHqZ4',
       isActive: true,
       isSuperAdmin: false,
       failedLoginCount: 0,
@@ -614,7 +615,7 @@ export function generateDemoBackup() {
     version: 1,
     createdAt: now,
     companyId: COMPANY_ID,
-    companyCode: 'KAYAN',
+    companyCode: 'DEMO',
     companyName: 'شركة كيان للحلول والتجارة (بيانات تجريبية)',
     counts,
     tables,
