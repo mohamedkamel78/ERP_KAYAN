@@ -90,7 +90,6 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\icons\app_icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\backend\scripts\manage-kayan-db.ps1"" -Action install -Port 5433 -PgBinDir ""{app}\backend\pg"""; Flags: runhidden waituntilterminated; StatusMsg: "Configuring dedicated database service (KAYAN_PostgreSQL)..."
 Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""KAYAN ERP Server"" dir=in action=allow protocol=TCP localport=3000 profile=private,domain"; Flags: runhidden; StatusMsg: "Configuring Windows Firewall for local network access..."
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -101,3 +100,22 @@ Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""KAYA
 [UninstallDelete]
 ; Only the empty folder itself; the client's data stays in %APPDATA% on purpose.
 Type: dirifempty; Name: "{app}"
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  ScriptPath, Params: string;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    ScriptPath := ExpandConstant('{app}\backend\scripts\install-kayan-database.ps1');
+    Params := '-ExecutionPolicy Bypass -NoProfile -File "' + ScriptPath +
+      '" -AppDir "' + ExpandConstant('{app}') + '"';
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      RaiseException('Could not start KAYAN database provisioning.');
+    if ResultCode <> 0 then
+      RaiseException('KAYAN database provisioning failed. See %ProgramData%\KAYAN-ERP\installer-db-setup-error.log.');
+  end;
+end;

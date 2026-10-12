@@ -115,6 +115,11 @@ New-Item -ItemType Directory -Force -Path $backendFolder | Out-Null
 Copy-Item (Join-Path $backendSource "dist") $backendFolder -Recurse
 Copy-Item (Join-Path $backendSource "prisma") $backendFolder -Recurse
 Copy-Item (Join-Path $backendSource "scripts") $backendFolder -Recurse
+# The installer invokes the root-level PostgreSQL manager from the staged
+# backend scripts directory; the backend source scripts do not include it.
+$stagedScripts = Join-Path $backendFolder "scripts"
+Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $stagedScripts "manage-kayan-db.ps1") -Force
+Copy-Item (Join-Path $root "scripts\install-kayan-database.ps1") (Join-Path $stagedScripts "install-kayan-database.ps1") -Force
 Copy-Item (Join-Path $backendSource "package.json") $backendFolder
 Copy-Item (Join-Path $backendSource "package-lock.json") $backendFolder
 Copy-Item (Join-Path $backendSource ".env.production.example") $backendFolder
