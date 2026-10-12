@@ -305,6 +305,7 @@ if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
 }
 Copy-Item $shareSource (Join-Path $pgFolder "share") -Recurse -Force
 Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
+Copy-Item (Join-Path $root "scripts\install-kayan-database.ps1") (Join-Path $backendFolder "scripts\install-kayan-database.ps1") -Force
 
 # Probe the exact packaged bin/share layout before producing an installer.
 $probeData = Join-Path $env:TEMP ("kayan-pg-initdb-probe-" + [guid]::NewGuid().ToString("N"))
