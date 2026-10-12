@@ -688,7 +688,13 @@ async function main() {
             { timeoutMs: 15000, step: `choose-file-cancel-${attempt}` },
           ),
         ]);
-        await chooser.dismiss();
+        if (typeof chooser?.cancel === 'function') {
+          await chooser.cancel();
+        } else if (typeof chooser?.dismiss === 'function') {
+          await chooser.dismiss();
+        } else if (typeof chooser?.accept === 'function') {
+          await chooser.accept([]);
+        }
         await page.evaluate(() => {
           window.dispatchEvent(new Event('focus'));
           document.querySelectorAll('input[type="file"]').forEach((input) => {
