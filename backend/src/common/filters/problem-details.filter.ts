@@ -83,6 +83,11 @@ export class ProblemDetailsFilter implements ExceptionFilter {
           : String(b.message ?? detail);
         if (b.errors) extra = { errors: b.errors };
       }
+      if (status === HttpStatus.UNAUTHORIZED || status === HttpStatus.FORBIDDEN) {
+        this.logger.warn(
+          `Auth rejected (${status}) on ${request.method ?? '?'} ${request.originalUrl ?? request.url ?? '?'}: ${detail}`,
+        );
+      }
     } else if (translated) {
       status = translated.status;
       detail = translated.detail;

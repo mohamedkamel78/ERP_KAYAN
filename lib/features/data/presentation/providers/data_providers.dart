@@ -6,11 +6,6 @@ import '../../../../core/platform/download_request.dart';
 import '../../../../core/platform/picked_file.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 
-/// Where the server is, so a download link can be built.
-final appConfigProvider = Provider<AppConfig>(
-  (ref) => AppConfig.fromEnvironment(),
-);
-
 /// Builds the address of a report file or a print page, and the credential
 /// that has to travel in it.
 ///

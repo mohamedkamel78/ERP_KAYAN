@@ -154,6 +154,7 @@ async function main() {
       '--force-renderer-accessibility',
       '--no-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-popup-blocking',
       // The program is Arabic-first. Asking the browser for Arabic means
       // what is clicked is what a user in Cairo would read, which is also
       // the harder of the two cases: RTL layout and Arabic filenames.
@@ -218,19 +219,19 @@ async function main() {
       }),
     );
 
-    // Anything the server could not do. A 500 the server logged is worth
-    // more than a click that found nothing, so each one is printed with the
-    // sentence the server sent back about it.
+    // Anything the server could not do or rejected.
     const serverErrors = [];
     page.on('response', async (response) => {
-      if (response.status() < 500) return;
+      if (response.status() < 400) return;
       let body = '';
       try {
         body = (await response.text()).replace(/\s+/g, ' ').slice(0, 300);
       } catch {
         body = '(the body was gone before it could be read)';
       }
-      serverErrors.push(`${response.status()} ${response.url()} ${body}`);
+      if (response.status() >= 500) {
+        serverErrors.push(`${response.status()} ${response.url()} ${body}`);
+      }
       log(`SERVER ${response.status()} ${response.url()} ${body}`);
     });
 
@@ -591,16 +592,32 @@ async function main() {
     // ───────────────────────────────────────────── 3. print page
     const beforeTabs = (await browser.pages()).length;
     const clickedPrint = await clickNamed(['طباعة', 'Print'], { step: 'print' });
-    await wait(6000);
-    const pages = await browser.pages();
-    const printPage = pages[pages.length - 1];
-    const printUrl = pages.length > beforeTabs ? printPage.url() : page.url();
+    let printUrl = '';
+    let printPage = null;
+    for (let i = 0; i < 15; i++) {
+      const currentPages = await browser.pages();
+      printPage = currentPages.find((p) => /\/print/.test(p.url()));
+      if (printPage) {
+        printUrl = printPage.url();
+        break;
+      }
+      const printFrame = page.frames().find((f) => /\/print/.test(f.url()));
+      if (printFrame) {
+        printUrl = printFrame.url();
+        break;
+      }
+      await wait(500);
+    }
+    if (!printUrl) {
+      const currentPages = await browser.pages();
+      printUrl = currentPages.length > beforeTabs ? currentPages[currentPages.length - 1].url() : page.url();
+    }
     check(
       'the print button reaches a print page',
       clickedPrint && /\/print/.test(printUrl),
       printUrl,
     );
-    if (pages.length > beforeTabs) {
+    if (printPage && printPage !== page) {
       await printPage
         .screenshot({ path: join(OUT_DIR, '05-print-page.png') })
         .catch(() => {});
@@ -631,7 +648,7 @@ async function main() {
     try {
       const [chooser] = await Promise.all([
         page.waitForFileChooser({ timeout: 10000 }),
-        clickNamed(['ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
+        clickNamed(['اختر الملف', 'ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
       ]);
       // A small spreadsheet the server can parse, written here so the tool
       // travels alone.
@@ -664,9 +681,14 @@ async function main() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const [chooser] = await Promise.all([
           page.waitForFileChooser({ timeout: 10000 }),
-          clickNamed(['ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
+          clickNamed(['اختر الملف', 'ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
         ]);
         await chooser.dismiss();
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event('focus'));
+          const inputs = document.querySelectorAll('input[type="file"]');
+          inputs.forEach((input) => input.dispatchEvent(new Event('cancel')));
+        }).catch(() => {});
         await wait(1500);
       }
       cancelRecovered = true;

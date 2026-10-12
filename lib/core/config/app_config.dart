@@ -86,9 +86,15 @@ class AppConfig {
       const hasCustomUrl = bool.hasEnvironment('API_BASE_URL');
       if (!hasCustomUrl) {
         if (Uri.base.scheme.startsWith('http')) {
+          final host = Uri.base.host;
           final origin = Uri.base.origin;
-          if (Uri.base.host != 'localhost' && Uri.base.host != '127.0.0.1') {
-            resolvedBaseUrl = '$origin/api/v1';
+          if (host != 'localhost' && host != '127.0.0.1') {
+            if (Uri.base.port == 3000 || Uri.base.port == 80 || Uri.base.port == 443 || !Uri.base.hasPort) {
+              resolvedBaseUrl = '$origin/api/v1';
+            } else {
+              final scheme = Uri.base.scheme;
+              resolvedBaseUrl = '$scheme://$host:3000/api/v1';
+            }
           } else if (Uri.base.port == 3000) {
             resolvedBaseUrl = '$origin/api/v1';
           }

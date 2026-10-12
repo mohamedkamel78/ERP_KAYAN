@@ -77,7 +77,7 @@ async function ensureRole(admin, target) {
   );
   if (rows.length === 0) {
     await admin.$executeRawUnsafe(
-      `CREATE ROLE ${quote(target.user)} WITH LOGIN PASSWORD ${literal(target.password)}`,
+      `CREATE ROLE ${quote(target.user)} WITH LOGIN CREATEDB PASSWORD ${literal(target.password)}`,
     );
     return 'created';
   }
@@ -85,7 +85,7 @@ async function ensureRole(admin, target) {
   // install the role may exist with an empty password, and on a machine where
   // the file was edited it may be out of date.
   await admin.$executeRawUnsafe(
-    `ALTER ROLE ${quote(target.user)} WITH LOGIN PASSWORD ${literal(target.password)}`,
+    `ALTER ROLE ${quote(target.user)} WITH LOGIN CREATEDB PASSWORD ${literal(target.password)}`,
   );
   return 'updated';
 }

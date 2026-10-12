@@ -58,7 +58,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   final notifier = ref.watch(_routerNotifierProvider);
 
   return GoRouter(
-    initialLocation: AppRoutes.dashboard,
+    initialLocation: AppRoutes.login,
     refreshListenable: notifier,
     redirect: (context, state) {
       final auth = ref.read(authControllerProvider);
