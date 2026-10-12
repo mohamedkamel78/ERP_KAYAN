@@ -85,7 +85,7 @@ jobs:
               cat /tmp/analyze.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            tail -n 30 /tmp/analyze.txt | while IFS= read -r line; do
+            grep -vE "(Resolving dependencies|Downloading packages|\([0-9].*?available\)|^  [a-z_]+ [0-9])" /tmp/analyze.txt | tail -n 30 | while IFS= read -r line; do
               echo "::error::${line}"
             done
           fi
