@@ -51,10 +51,9 @@ class TokenStore {
     return prefs.getString(_kLocale);
   }
 
-  Future<String?> saveLocale(String languageCode) async {
+  Future<void> saveLocale(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kLocale, languageCode);
-    return languageCode;
   }
 
   Future<String?> _read(String key) async {

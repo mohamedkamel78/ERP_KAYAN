@@ -107,14 +107,22 @@ class _BackendGateState extends State<BackendGate> {
 
   Widget _wrapScope(
     BuildContext context, {
-    List<Override> overrides = const [],
+    String? baseUrlOverride,
   }) {
     final hasParentScope =
         context.findAncestorWidgetOfExactType<ProviderScope>() != null;
-    if (hasParentScope && overrides.isEmpty) {
+    if (hasParentScope && baseUrlOverride == null) {
       return widget.child;
     }
-    return ProviderScope(overrides: overrides, child: widget.child);
+    return ProviderScope(
+      overrides: [
+        if (baseUrlOverride != null)
+          appConfigProvider.overrideWithValue(
+            AppConfig.forLocalServer(baseUrlOverride),
+          ),
+      ],
+      child: widget.child,
+    );
   }
 
   @override
@@ -143,14 +151,7 @@ class _BackendGateState extends State<BackendGate> {
     if (status.isReady) {
       // The program runs against the server this machine just started. The
       // address is injected here so no screen needs to know where it came from.
-      return _wrapScope(
-        context,
-        overrides: [
-          appConfigProvider.overrideWithValue(
-            AppConfig.forLocalServer(status.baseUrl!),
-          ),
-        ],
-      );
+      return _wrapScope(context, baseUrlOverride: status.baseUrl!);
     }
 
     if (status.problem == null) {
