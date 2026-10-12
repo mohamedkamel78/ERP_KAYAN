@@ -40,6 +40,10 @@ class ApiClient {
           final token = await _tokenStore.readAccessToken();
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
+            // Noted on the request, because what a refusal means depends on
+            // whether a credential went out with it - and by the time the
+            // answer comes back the store may hold a different one.
+            options.extra[_sentWithCredential] = true;
           }
           handler.next(options);
         },
@@ -55,7 +59,23 @@ class ApiClient {
           // answering "Invalid or expired token".
           if (_isSessionRefusal(e) &&
               e.requestOptions.extra[_skipRenewal] != true) {
-            final renewed = await _renewSession();
+            // A refusal is only a session that ran out when a session went
+            // out with the request.
+            //
+            // Before anybody has signed in, a screen asks for things it is
+            // not entitled to and is refused - a report behind the
+            // sign-in, the state of the setup, the capabilities of the
+            // server. That is the ordinary shape of a program that has not
+            // been signed into yet, and it is not an expired session.
+            // Answering it as one clears the store and signs the person
+            // out, and when that happens while a sign-in is completing it
+            // takes the brand-new token with it: the person is then signed
+            // in and every screen behind it answers "Missing bearer
+            // token", over and over, for as long as the tab is open.
+            final hadCredential =
+                e.requestOptions.extra[_sentWithCredential] == true;
+            final refreshable = hadCredential || await _hasRefreshToken();
+            final renewed = refreshable && await _renewSession();
             if (renewed) {
               try {
                 final retried = await _dio.fetch<dynamic>(
@@ -66,10 +86,14 @@ class ApiClient {
                 // The renewal worked but the request itself did not; the
                 // original failure is the one worth reporting.
               }
-            } else {
+            } else if (hadCredential) {
+              // There was a session and it cannot be renewed. Only then is
+              // signing the person out the honest answer.
               await _tokenStore.clear();
               await onSessionExpired?.call();
             }
+            // Otherwise there was nothing to renew and nobody to sign out:
+            // the request simply was not allowed, and the caller is told.
           }
           handler.next(e);
         },
@@ -95,6 +119,16 @@ class ApiClient {
   Future<bool>? _renewing;
 
   static const _skipRenewal = 'skipSessionRenewal';
+
+  /// Set on a request that went out with a sign-in token in its header.
+  static const _sentWithCredential = 'sentWithCredential';
+
+  /// Whether a refresh token is held, and so whether a refusal is worth
+  /// answering with a renewal.
+  Future<bool> _hasRefreshToken() async {
+    final token = await _tokenStore.readRefreshToken();
+    return token != null && token.isNotEmpty;
+  }
 
   Dio get raw => _dio;
 
