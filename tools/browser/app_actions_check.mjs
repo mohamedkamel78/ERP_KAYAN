@@ -27,7 +27,7 @@
  * that finds nothing is almost always a wording change, and the fix is to
  * read the real wording rather than to guess at it.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -46,9 +46,28 @@ const OUT_DIR = process.env.OUT_DIR || '/tmp/kayan-e2e';
 const results = [];
 const consoleLines = [];
 
+/**
+ * Writes a line to the log, and does not lose it.
+ *
+ * `console.log` to a pipe is asynchronous in Node: when a process ends with
+ * `process.exit()`, whatever it had not flushed yet simply disappears. That
+ * is how a run can end with no verdict at the bottom of its own log - the
+ * lines were written, they were just not on their way out yet. Writing
+ * synchronously means the last line of a failing run is the one that says
+ * why.
+ */
+const log = (line) => {
+  consoleLines.push(String(line));
+  try {
+    writeSync(1, `${line}\n`);
+  } catch {
+    // stdout is gone (the pipe closed); there is nowhere left to say it.
+  }
+};
+
 function check(name, ok, detail) {
   results.push({ name, ok, detail: detail ?? null });
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` - ${detail}` : ''}`);
+  log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` - ${detail}` : ''}`);
   save();
 }
 
@@ -204,7 +223,7 @@ async function main() {
         body = '(the body was gone before it could be read)';
       }
       serverErrors.push(`${response.status()} ${response.url()} ${body}`);
-      console.log(`SERVER ${response.status()} ${response.url()} ${body}`);
+      log(`SERVER ${response.status()} ${response.url()} ${body}`);
     });
 
     // What the server answered. The one response that matters most is the
@@ -221,7 +240,7 @@ async function main() {
         body = '(the body was gone before it could be read)';
       }
       responses.push({ url, status: response.status(), body });
-      console.log(`LOGIN ${response.status()} ${url.split('/api/v1')[1] ?? url} ${body}`);
+      log(`LOGIN ${response.status()} ${url.split('/api/v1')[1] ?? url} ${body}`);
     });
 
     const shot = async (name) => {
@@ -267,7 +286,7 @@ async function main() {
           .map((node) => `${node.label || node.text}[${node.role}]`)
           .filter(Boolean);
         for (let index = 0; index < names.length; index += 6) {
-          console.log(`LABELS ${step}: ${names.slice(index, index + 6).join(' | ')}`);
+          log(`LABELS ${step}: ${names.slice(index, index + 6).join(' | ')}`);
         }
         const inputs = await page.$$eval('input', (nodes) =>
           nodes.map((node) => ({
@@ -281,9 +300,9 @@ async function main() {
           })),
         );
         writeFileSync(join(OUT_DIR, `inputs-${step}.json`), JSON.stringify(inputs, null, 2));
-        console.log(`INPUTS ${step}: ${inputs.length} input element(s)`);
+        log(`INPUTS ${step}: ${inputs.length} input element(s)`);
         for (const input of inputs.slice(0, 6)) {
-          console.log(
+          log(
             `INPUTS ${step}: type=${input.type} hidden=${input.hidden} ` +
               `at ${input.rect.x},${input.rect.y} aria="${input.aria}"`,
           );
@@ -291,9 +310,9 @@ async function main() {
         const visible = await page.evaluate(() =>
           (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 300),
         );
-        console.log(`SCREEN ${step}: ${visible}`);
+        log(`SCREEN ${step}: ${visible}`);
       } catch (error) {
-        console.log(`LABELS ${step}: could not be read - ${error.message}`);
+        log(`LABELS ${step}: could not be read - ${error.message}`);
       }
     }
 
@@ -365,13 +384,13 @@ async function main() {
       while (Date.now() < deadline) {
         const at = await findNode(list, []);
         if (at) {
-          console.log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
+          log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
           await page.mouse.click(at.x, at.y);
           return true;
         }
         await wait(250);
       }
-      console.log(`LABELS missed: nothing labelled ${list.join(' / ')} was found at step ${step}`);
+      log(`LABELS missed: nothing labelled ${list.join(' / ')} was found at step ${step}`);
       await describe(step);
       return false;
     }
@@ -453,7 +472,7 @@ async function main() {
         await wait(150);
         const values = await fieldValues();
         if (values.includes(value)) return true;
-        console.log(
+        log(
           `INPUTS attempt ${attempt + 1} put ${JSON.stringify(values)} in the fields, not "${value}"`,
         );
       }
@@ -480,7 +499,7 @@ async function main() {
         const ok = await typeIntoField(usable[index].box, values[index]);
         if (!ok) return false;
       }
-      console.log(`INPUTS typed: ${JSON.stringify(await fieldValues())}`);
+      log(`INPUTS typed: ${JSON.stringify(await fieldValues())}`);
       return true;
     }
 
@@ -505,7 +524,7 @@ async function main() {
     if (/login|signin|setup/.test(page.url())) {
       // A form that is filled in usually submits on Enter too. Trying it is
       // cheaper than a run that reports a sign-in it never attempted.
-      console.log('LOGIN the button did not move the page; trying Enter');
+      log('LOGIN the button did not move the page; trying Enter');
       await page.keyboard.press('Enter');
       for (let attempt = 0; attempt < 12; attempt += 1) {
         if (!/login|signin|setup/.test(page.url())) break;
@@ -516,7 +535,7 @@ async function main() {
       .slice(beforeLoginResponse)
       .find((entry) => /\/auth\/login/.test(entry.url));
     if (loginResponse) {
-      console.log(`LOGIN sign-in answered ${loginResponse.status}`);
+      log(`LOGIN sign-in answered ${loginResponse.status}`);
     }
     await wait(9000);
     await shot('03-after-signin');
@@ -706,7 +725,7 @@ async function main() {
   }
 
   const failures = results.filter((result) => !result.ok);
-  console.log(
+  log(
     `\n${results.length - failures.length}/${results.length} checks passed` +
       (failures.length
         ? `\nFAILED: ${failures.map((entry) => entry.name).join('\n       ')}`
@@ -719,10 +738,18 @@ async function main() {
 mkdirSync(OUT_DIR, { recursive: true });
 
 main()
-  .then((code) => process.exit(code))
+  .then((code) => {
+    // Not process.exit: it would cut the log off mid-sentence. Setting the
+    // code lets Node finish writing and leave on its own.
+    process.exitCode = code;
+  })
   .catch((error) => {
-    console.error('the browser check itself broke:', error);
-    results.push({ name: 'the check ran to the end', ok: false, detail: String(error?.message ?? error) });
+    log(`the browser check itself broke: ${error?.stack ?? error}`);
+    results.push({
+      name: 'the check ran to the end',
+      ok: false,
+      detail: String(error?.message ?? error),
+    });
     save();
-    process.exit(2);
+    process.exitCode = 2;
   });
