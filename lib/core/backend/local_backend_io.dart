@@ -669,7 +669,7 @@ class BackendLayout {
       final programData = Platform.environment['ProgramData'];
       if (programData != null && programData.isNotEmpty) {
         final machineFile = File(
-          '${programData}${Platform.pathSeparator}KAYAN-ERP'
+          '$programData${Platform.pathSeparator}KAYAN-ERP'
           '${Platform.pathSeparator}kayan.env',
         );
         if (machineFile.existsSync()) return machineFile;
