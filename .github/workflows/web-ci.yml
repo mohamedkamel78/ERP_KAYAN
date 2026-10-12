@@ -257,7 +257,7 @@ jobs:
             sed -r 's/\x1b\[[0-9;]*m//g' /tmp/kayan-server.log \
               | grep -iE "backup|restor|safety|dump" | tail -30 \
               | paste -sd'|' | fold -w 2500 | head -2 \
-              | while IFS= read -r line; do echo "::error title=server log: backups and restores::$line"; done
+              | while IFS= read -r line; do echo "::error title=server log (backups and restores)::$line"; done
             exit "$status"
           fi
 
