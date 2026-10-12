@@ -247,20 +247,19 @@ jobs:
             # the page looked like. Getting this the wrong way round is how
             # a run filled its quota with the login screen and dropped the
             # verdict.
-            grep -E "^(FAIL|DIED|HTTP|AUTH|STORAGE)|checks passed|the browser check itself broke" /tmp/browser.txt \
-              | head -12 | while IFS= read -r line; do
+            grep -E "^(FAIL|DIED|AUTH|STORAGE)|checks passed|the browser check itself broke" /tmp/browser.txt \
+              | head -6 | while IFS= read -r line; do
                 echo "::error::$line"
               done
+            # ...then what the server refused, one line per address.
+            grep -E "^HTTP " /tmp/browser.txt | head -3 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
             # ...then whatever the log ended with, because a run that stops
             # mid-sentence is exactly the run whose ending matters most.
-            tail -12 /tmp/browser.txt | while IFS= read -r line; do
+            tail -8 /tmp/browser.txt | while IFS= read -r line; do
               echo "::error::tail: $line"
             done
-            # ...and only then the picture of the screen.
-            grep -E "^(LABELS|INPUTS|SCREEN|CLICK|LOGIN|SERVER)" /tmp/browser.txt \
-              | head -8 | while IFS= read -r line; do
-                echo "::error::$line"
-              done
             exit "$status"
           fi
 

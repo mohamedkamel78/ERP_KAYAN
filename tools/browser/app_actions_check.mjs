@@ -190,6 +190,17 @@ async function main() {
       }
     });
 
+    /** The program's own words, most recent last, one line each. */
+    const sayConsole = (when) => {
+      if (pageConsole.length === 0) {
+        log(`CONSOLE ${when}: the program said nothing`);
+        return;
+      }
+      for (const line of pageConsole.slice(-6)) {
+        log(`CONSOLE ${when}: ${line}`);
+      }
+    };
+
     /** One line saying whether the signed-in session reached the server. */
     const reportAuth = async (when) => {
       log(
@@ -209,7 +220,14 @@ async function main() {
       consoleErrors.push(`pageerror: ${error.message}`);
       consoleLines.push(`pageerror: ${error.message}`);
     });
+    // Everything the program said, not only what it complained about.
+    // Flutter writes its own log lines to the console, and the sentence
+    // that explains a failed sign-in is one of them.
+    const pageConsole = [];
     page.on('console', (message) => {
+      if (pageConsole.length < 200) {
+        pageConsole.push(`${message.type()}: ${message.text()}`);
+      }
       if (message.type() === 'error') {
         consoleErrors.push(`console: ${message.text()}`);
         consoleLines.push(`console: ${message.text()}`);
@@ -254,9 +272,20 @@ async function main() {
     // failures. A refused request is how an expired ticket, a missing token
     // and a wrong parameter all announce themselves, and a run that only
     // looked at 5xx could see a screen full of 401s and report nothing.
+    // The same refusal from the same address is one fact, however often
+    // it happens: nine identical 401s would otherwise take the whole
+    // annotation allowance and leave nothing for the verdict.
+    const seenAnswers = new Map();
     page.on('response', async (response) => {
       const status = response.status();
       if (status < 400 || /favicon/.test(response.url())) return;
+      const seen = seenAnswers.get(`${status} ${response.url()}`) ?? 0;
+      seenAnswers.set(`${status} ${response.url()}`, seen + 1);
+      if (seen >= 2) return;
+      if (seen === 1) {
+        log(`HTTP ${status} ${response.url()} (twice or more - further repeats not listed)`);
+        return;
+      }
       let body = '';
       try {
         body = (await response.text()).replace(/\s+/g, ' ').slice(0, 200);
@@ -584,6 +613,7 @@ async function main() {
     await wait(9000);
     await shot('03-after-signin');
     await reportAuth('after sign-in');
+    await sayConsole('after sign-in');
     const at = page.url();
     check(
       'sign in opens the workspace',
