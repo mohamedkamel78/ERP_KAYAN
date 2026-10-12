@@ -3,15 +3,19 @@ import {
   ForbiddenException,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import { mkdir, readFile, stat, writeFile } from 'fs/promises';
+import { join } from 'path';
 
 import { AuditService } from '../../common/audit/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { MaintenanceService } from '../../common/maintenance/maintenance';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { BackupService } from '../backup/backup.service';
 import { FullBackupService } from '../backup/full-backup.service';
 import { RESET_CONFIRMATION_WORD } from './dto/reset.dto';
 
@@ -82,6 +86,7 @@ export class ResetService {
     private readonly audit: AuditService,
     private readonly maintenance: MaintenanceService,
     private readonly backups: FullBackupService,
+    @Optional() private readonly companyBackups?: BackupService,
   ) {}
 
   /// What a reset would remove, for the dialog to show before anything is
@@ -214,18 +219,51 @@ export class ResetService {
     );
 
     try {
-      // 4. A backup first — and one that is proven readable, not merely a
+      // 4. A verified backup first — and one that is proven readable, not merely a
       //    file that exists. No backup, no reset.
-      const backup = await this.backups.createFull(user.userId);
-      const verified = await this.backups
-        .verify(backup.file.name)
-        .catch((error: unknown) => {
-          throw new ServiceUnavailableException(
-            `A backup was written but it could not be verified, so the reset ` +
-              `was abandoned and nothing was deleted ` +
-              `(${(error as Error).message}).`,
+      let verified: { name: string; sizeBytes: number; entries: number };
+
+      const fullCapabilities =
+        typeof this.backups?.capabilities === 'function'
+          ? await this.backups.capabilities().catch(() => ({ available: false }))
+          : { available: typeof this.backups?.createFull === 'function' };
+
+      if (fullCapabilities?.available) {
+        try {
+          const backup = await this.backups.createFull(user.userId);
+          const checked = await this.backups.verify(backup.file.name);
+          verified = {
+            name: backup.file.name,
+            sizeBytes: checked.sizeBytes,
+            entries: checked.entries,
+          };
+        } catch (dumpError) {
+          this.logger.warn(
+            `Full database pg_dump failed (${(dumpError as Error).message}), attempting company-level JSON backup before reset...`,
           );
-        });
+          if (this.companyBackups) {
+            verified = await this.createAndVerifyCompanyBackup(
+              me.companyId,
+              me.company?.code,
+            );
+          } else {
+            throw new ServiceUnavailableException(
+              `The safety backup could not be created (${(dumpError as Error).message}). ` +
+                'The reset was abandoned and nothing was deleted.',
+            );
+          }
+        }
+      } else if (this.companyBackups) {
+        verified = await this.createAndVerifyCompanyBackup(
+          me.companyId,
+          me.company?.code,
+        );
+      } else {
+        throw new ServiceUnavailableException(
+          'No backup mechanism is available on this installation. ' +
+            'The reset was abandoned and nothing was deleted.',
+        );
+      }
 
       this.logger.warn(
         `Reset requested by ${me.username}: backup ${verified.name} ` +
@@ -473,6 +511,63 @@ export class ResetService {
     } finally {
       this.inFlight = false;
       this.maintenance.end();
+    }
+  }
+
+  private async createAndVerifyCompanyBackup(
+    companyId: string,
+    companyCode?: string,
+  ): Promise<{ name: string; sizeBytes: number; entries: number }> {
+    try {
+      const backupData = await this.companyBackups!.create(companyId);
+      const totalEntries = Object.values(backupData.counts ?? {}).reduce(
+        (sum, count) => sum + count,
+        0,
+      );
+
+      const dir =
+        typeof this.backups?.ensureBackupDir === 'function'
+          ? await this.backups.ensureBackupDir()
+          : join(process.cwd(), 'backups');
+      await mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+      const name = `kayan-backup-${companyCode || 'company'}-${stamp}.json`;
+      const filePath = join(dir, name);
+
+      const content = Buffer.from(JSON.stringify(backupData, null, 2), 'utf8');
+      await writeFile(filePath, content);
+
+      // Verify the file was written and can be read back cleanly
+      const statInfo = await stat(filePath);
+      if (statInfo.size === 0) {
+        throw new Error('The backup file is empty (0 bytes).');
+      }
+
+      const readBack = await readFile(filePath, 'utf8');
+      const parsed = JSON.parse(readBack);
+      if (
+        !parsed ||
+        parsed.format !== 'kayan-backup' ||
+        parsed.companyId !== companyId
+      ) {
+        throw new Error(
+          'The backup verification failed (invalid format or company ID).',
+        );
+      }
+
+      return {
+        name,
+        sizeBytes: statInfo.size,
+        entries: totalEntries,
+      };
+    } catch (error) {
+      this.logger.error(
+        `Failed to create or verify company safety backup: ${(error as Error).message}`,
+      );
+      throw new ServiceUnavailableException(
+        `A verified safety backup could not be created before reset ` +
+          `(${(error as Error).message}). The reset was aborted and NO DATA was deleted.`,
+      );
     }
   }
 }

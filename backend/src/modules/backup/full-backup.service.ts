@@ -666,9 +666,8 @@ export class FullBackupService {
       );
       let restored = false;
       try {
+        await this.cleanDatabaseSchema();
         await run(tools.pgRestore as string, [
-          '--clean',
-          '--if-exists',
           '--exit-on-error',
           '--no-owner',
           '--no-privileges',
@@ -736,9 +735,8 @@ export class FullBackupService {
     this.logger.warn(`Recovering from safety backup ${name}`);
     try {
       const path = this.safePath(name);
+      await this.cleanDatabaseSchema();
       await run(pgRestore, [
-        '--clean',
-        '--if-exists',
         '--exit-on-error',
         '--no-owner',
         '--no-privileges',
@@ -854,13 +852,13 @@ export class FullBackupService {
     }
   }
 
-  private backupDir(): string {
+  public backupDir(): string {
     return (
       process.env.KAYAN_BACKUP_DIR?.trim() || join(process.cwd(), 'backups')
     );
   }
 
-  private async ensureBackupDir(): Promise<string> {
+  public async ensureBackupDir(): Promise<string> {
     const dir = this.backupDir();
     try {
       await mkdir(dir, { recursive: true });
@@ -942,10 +940,17 @@ export class FullBackupService {
     if (buffer.length > MAX_UPLOAD_BYTES) {
       throw new BadRequestException('The backup file is larger than 2 GB.');
     }
+    const isJson = buffer[0] === 0x7b /* '{' */ || label.toLowerCase().endsWith('.json');
+    if (isJson) {
+      throw new BadRequestException(
+        `الملف "${label}" هو ملف نسخة احتياطية لبيانات الشركة بصيغة JSON، وليس ملف أرشيف PostgreSQL (.dump). ` +
+          'لاستعادة ملف JSON، يرجى استخدام قسم "استعادة بيانات الشركة" (/api/v1/backup/restore).',
+      );
+    }
     if (!buffer.subarray(0, 5).equals(CUSTOM_MAGIC)) {
       throw new BadRequestException(
-        `"${label}" is not a PostgreSQL backup made with pg_dump (Custom ` +
-          'format). Choose a .dump file created by the backup screen.',
+        `الملف "${label}" ليس ملف أرشيف PostgreSQL صالحاً بصيغة Custom Format (.dump). ` +
+          'يرجى اختيار ملف .dump صالح تم إنشاؤه عبر pg_dump.',
       );
     }
   }
@@ -957,13 +962,33 @@ export class FullBackupService {
    */
   private connectionArgs(databaseOverride?: string): string[] {
     if (databaseOverride) {
-      return [`--dbname=${databaseOverride}`];
+      return [`--dbname=${cleanDatabaseUrl(databaseOverride)}`];
     }
-    return [`--dbname=${this.requireDatabase()}`];
+    return [`--dbname=${cleanDatabaseUrl(this.requireDatabase())}`];
   }
 
   private async execSql(sql: string): Promise<void> {
     await this.prisma.$executeRawUnsafe(sql);
+  }
+
+  private async cleanDatabaseSchema(): Promise<void> {
+    try {
+      await this.execSql('DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;');
+    } catch (error) {
+      this.logger.warn(
+        `Could not drop public schema with CASCADE: ${(error as Error).message}`,
+      );
+    }
+  }
+}
+
+function cleanDatabaseUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.searchParams.delete('schema');
+    return url.toString();
+  } catch {
+    return raw.replace(/([?&])schema=[^&]*/, '$1').replace(/[?&]$/, '');
   }
 }
 
@@ -979,7 +1004,7 @@ function connectionEnv(): NodeJS.ProcessEnv {
       PGPORT: url.port || '5432',
       PGUSER: decodeURIComponent(url.username),
       PGPASSWORD: decodeURIComponent(url.password),
-      PGDATABASE: decodeURIComponent(url.pathname.replace(/^\//, '')),
+      PGDATABASE: decodeURIComponent(url.pathname.replace(/^\//, '')).split('?')[0],
     };
   } catch {
     return {};

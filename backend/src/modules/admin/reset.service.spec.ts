@@ -170,6 +170,7 @@ describe('ResetService', () => {
     options: {
       backups?: ReturnType<typeof backups>;
       user?: Parameters<typeof prisma>[0];
+      companyBackups?: ReturnType<typeof mockCompanyBackups>;
     } = {},
   ) {
     return new ResetService(
@@ -177,7 +178,26 @@ describe('ResetService', () => {
       audit as never,
       maintenance() as never,
       (options.backups ?? backups()) as never,
+      (options.companyBackups ?? mockCompanyBackups()) as never,
     );
+  }
+
+  function mockCompanyBackups(fail = false) {
+    return {
+      create: async (companyId: string) => {
+        if (fail) throw new Error('database read failure');
+        return {
+          format: 'kayan-backup',
+          version: 1,
+          createdAt: new Date().toISOString(),
+          companyId,
+          companyCode: 'KAYAN',
+          companyName: 'Kayan',
+          counts: { accounts: 30, journalEntries: 3 },
+          tables: { accounts: [], journalEntries: [] },
+        };
+      },
+    };
   }
 
   const admin = (overrides: Partial<AuthUser> = {}): AuthUser => ({
@@ -272,7 +292,10 @@ describe('ResetService', () => {
 
   it('does not reset when the backup cannot be taken', async () => {
     await expect(
-      service({ backups: backups('dump-fails') }).reset(admin(), 'pw', 'RESET'),
+      service({
+        backups: backups('dump-fails'),
+        companyBackups: mockCompanyBackups(true),
+      }).reset(admin(), 'pw', 'RESET'),
     ).rejects.toThrow(ServiceUnavailableException);
     expect(deletions).toEqual([]);
     expect(companyUpdates).toEqual([]);
@@ -280,7 +303,10 @@ describe('ResetService', () => {
 
   it('does not reset when the backup cannot be verified', async () => {
     await expect(
-      service({ backups: backups('verify-fails') }).reset(
+      service({
+        backups: backups('verify-fails'),
+        companyBackups: mockCompanyBackups(true),
+      }).reset(
         admin(),
         'pw',
         'RESET',
@@ -341,5 +367,47 @@ describe('ResetService', () => {
     expect(preview.confirmationWord).toBe('RESET');
     // The administrator keeping their account is not counted as a deletion.
     expect(preview.counts.users).toBe(0);
+  });
+
+  it('creates and verifies a company JSON safety backup when full backup tools are unavailable', async () => {
+    const noToolsBackups = {
+      capabilities: async () => ({ available: false }),
+      createFull: async () => {
+        throw new Error('pg_dump unavailable');
+      },
+      verify: async () => {
+        throw new Error('pg_restore unavailable');
+      },
+      ensureBackupDir: async () => '/tmp/kayan-spec-backups',
+    };
+    const result = await service({ backups: noToolsBackups as never }).reset(
+      admin(),
+      'pw',
+      'RESET',
+    );
+    expect(result.reset).toBe(true);
+    expect(result.backupFile).toMatch(/\.json$/);
+    expect(deletions).toEqual([...MODELS]);
+  });
+
+  it('aborts and deletes nothing when both full backup and company backup fail', async () => {
+    const failingBackups = {
+      capabilities: async () => ({ available: false }),
+      createFull: async () => {
+        throw new Error('pg_dump unavailable');
+      },
+      verify: async () => {
+        throw new Error('pg_restore unavailable');
+      },
+      ensureBackupDir: async () => '/tmp/kayan-spec-backups',
+    };
+    await expect(
+      service({
+        backups: failingBackups as never,
+        companyBackups: mockCompanyBackups(true),
+      }).reset(admin(), 'pw', 'RESET'),
+    ).rejects.toThrow(ServiceUnavailableException);
+    expect(deletions).toEqual([]);
+    expect(companyUpdates).toEqual([]);
   });
 });
