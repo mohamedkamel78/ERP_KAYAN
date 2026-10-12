@@ -191,6 +191,23 @@ async function main() {
       }),
     );
 
+    // What the server answered. The one response that matters most is the
+    // sign-in: if the screen does not move, the reason is in that status
+    // code and not in the clicking.
+    const responses = [];
+    page.on('response', async (response) => {
+      const url = response.url();
+      if (!/\/auth\/(login|refresh|download-ticket)/.test(url)) return;
+      let body = '';
+      try {
+        body = (await response.text()).slice(0, 300);
+      } catch {
+        body = '(the body was gone before it could be read)';
+      }
+      responses.push({ url, status: response.status(), body });
+      console.log(`LOGIN ${response.status()} ${url.split('/api/v1')[1] ?? url} ${body}`);
+    });
+
     const shot = async (name) => {
       const path = join(OUT_DIR, `${name}.png`);
       await page.screenshot({ path }).catch(() => {});
@@ -216,23 +233,51 @@ async function main() {
           .filter((node) => node.label || node.text),
       );
 
-    async function dumpLabels(step) {
+    /**
+     * Everything the page will admit to, printed into the log.
+     *
+     * CI artifacts are a luxury a failing run does not always get read, so
+     * what a stuck click needs to say has to reach the log itself. Each
+     * line is prefixed so the workflow can lift them into annotations.
+     */
+    async function describe(step) {
       try {
         const labels = await publishedLabels();
         writeFileSync(
           join(OUT_DIR, `labels-${step}.json`),
           JSON.stringify(labels, null, 2),
         );
-        console.log(
-          `      the page published ${labels.length} labels; ` +
-            `the first few: ${labels
-              .slice(0, 12)
-              .map((node) => node.label || node.text)
-              .filter(Boolean)
-              .join(' | ')}`,
+        const names = labels
+          .map((node) => node.label || node.text)
+          .filter(Boolean);
+        for (let index = 0; index < names.length; index += 8) {
+          console.log(`LABELS ${step}: ${names.slice(index, index + 8).join(' | ')}`);
+        }
+        const inputs = await page.$$eval('input', (nodes) =>
+          nodes.map((node) => ({
+            type: node.type,
+            hidden: node.hidden,
+            aria: node.getAttribute('aria-label') || '',
+            rect: (() => {
+              const r = node.getBoundingClientRect();
+              return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) };
+            })(),
+          })),
         );
-      } catch {
-        /* diagnostics only */
+        writeFileSync(join(OUT_DIR, `inputs-${step}.json`), JSON.stringify(inputs, null, 2));
+        console.log(`INPUTS ${step}: ${inputs.length} input element(s)`);
+        for (const input of inputs.slice(0, 6)) {
+          console.log(
+            `INPUTS ${step}: type=${input.type} hidden=${input.hidden} ` +
+              `at ${input.rect.x},${input.rect.y} aria="${input.aria}"`,
+          );
+        }
+        const visible = await page.evaluate(() =>
+          (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 300),
+        );
+        console.log(`SCREEN ${step}: ${visible}`);
+      } catch (error) {
+        console.log(`LABELS ${step}: could not be read - ${error.message}`);
       }
     }
 
@@ -280,8 +325,8 @@ async function main() {
         }
         await wait(250);
       }
-      console.log(`      nothing labelled ${list.join(' / ')} was found`);
-      await dumpLabels(step);
+      console.log(`LABELS missed: nothing labelled ${list.join(' / ')} was found at step ${step}`);
+      await describe(step);
       return false;
     }
 
@@ -309,24 +354,57 @@ async function main() {
     await page.goto(APP_URL, { waitUntil: 'networkidle2', timeout: 90000 });
     await wait(6000); // Flutter's first paint
     await shot('01-login');
+    await describe('01-login');
 
-    const typedUser = await clickField(['اسم المستخدم', 'Username'], 'user-field');
-    await page.keyboard.type(USERNAME);
-    const typedPassword = await clickField(['كلمة المرور', 'Password'], 'password-field');
-    await page.keyboard.type(PASSWORD);
+    // Flutter web keeps a real <input> element for each text field, so the
+    // credentials are typed into those rather than into a guessed point on
+    // the screen. The labelled-node route stays as the fallback.
+    async function typeIntoFields(values) {
+      const inputs = await page.$$('input');
+      const usable = [];
+      for (const input of inputs) {
+        const hidden = await input.evaluate((node) => node.hidden || node.type === 'hidden');
+        if (!hidden) usable.push(input);
+      }
+      if (usable.length < values.length) return false;
+      for (let index = 0; index < values.length; index += 1) {
+        await usable[index].click();
+        await usable[index].type(values[index], { delay: 20 });
+      }
+      return true;
+    }
+
+    let typed =
+      (await typeIntoFields([USERNAME, PASSWORD]).catch(() => false)) === true;
+    if (!typed) {
+      const typedUser = await clickField(['اسم المستخدم', 'Username'], 'user-field');
+      await page.keyboard.type(USERNAME);
+      const typedPassword = await clickField(['كلمة المرور', 'Password'], 'password-field');
+      await page.keyboard.type(PASSWORD);
+      typed = typedUser && typedPassword;
+    }
     await shot('02-credentials');
+    await wait(500);
 
+    const beforeLoginResponse = responses.length;
     await clickNamed(['تسجيل الدخول', 'Sign in'], { step: 'signin-button' });
+    const loginResponse = responses
+      .slice(beforeLoginResponse)
+      .find((entry) => /\/auth\/login/.test(entry.url));
+    if (loginResponse) {
+      console.log(`LOGIN sign-in answered ${loginResponse.status}`);
+    }
     await wait(9000);
     await shot('03-after-signin');
     const at = page.url();
     check(
       'sign in opens the workspace',
-      typedUser && typedPassword && !/login|signin|setup/.test(at),
-      `now at ${at}`,
+      typed && !/login|signin|setup/.test(at),
+      `now at ${at}` +
+        (loginResponse ? `, sign-in answered ${loginResponse.status}` : ''),
     );
     if (/login|signin|setup/.test(at)) {
-      await dumpLabels('after-signin');
+      await describe('after-signin');
       return 1;
     }
 
@@ -428,7 +506,7 @@ async function main() {
       choseFile && dryRunCalls.length > 0,
       choseFile ? `${dryRunCalls.length} read request(s)` : 'no file chooser opened',
     );
-    if (!choseFile) await dumpLabels('choose-file');
+    if (!choseFile) await describe('choose-file');
 
     // Closing the dialogue without a file must not wedge the button.
     let cancelRecovered = false;
