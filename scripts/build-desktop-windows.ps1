@@ -238,41 +238,18 @@ $toolsFolder = Join-Path $env:LOCALAPPDATA "kayan-tools"
 $portablePg = Join-Path $toolsFolder "pgsql\bin"
 if (Test-Path (Join-Path $portablePg "pg_dump.exe")) {
   $pgBin = $portablePg
-  Write-Host "      using the portable PostgreSQL toolchain at $portablePg"
+  Write-Host "      using the portable EDB PostgreSQL toolchain at $portablePg"
 }
 if (-not $pgBin) {
-  $candidates = @()
-  # The folder name here must not be $root: that name holds the repository
-  # root for the rest of the script, and a clobbered $root sends every later
-  # path (the window icon, the program folder) looking in the wrong place.
-  foreach ($installRoot in @("${env:ProgramFiles}\PostgreSQL", "${env:ProgramFiles(x86)}\PostgreSQL")) {
-    if ($installRoot -and (Test-Path $installRoot)) {
-      foreach ($versionDir in (Get-ChildItem $installRoot -Directory -ErrorAction SilentlyContinue)) {
-        $bin = Join-Path $versionDir.FullName "bin"
-        if (Test-Path (Join-Path $bin "pg_dump.exe")) { $candidates += $bin }
-      }
-    }
-  }
-  # Newest version first: a newer pg_dump reads older servers, the reverse
-  # is not true. The @() wrapper is load-bearing: a one-element array that
-  # goes through the pipeline collapses to a bare string, and indexing a
-  # string yields its first character - "C:\..." became "C" and the copy
-  # step then looked for a folder named C. Keep the array shape.
-  $candidates = @($candidates | Sort-Object -Descending)
-  if ($candidates.Count -gt 0) {
-    $pgBin = $candidates[0]
-    Write-Host "      using the installed PostgreSQL toolchain at $pgBin"
-  }
-}
-if (-not $pgBin) {
-  # Nothing usable on this machine: provision the portable toolchain, exactly
-  # where install-postgres-portable.bat puts it (the tools only - no database
-  # folder, no service, no PATH change, no confirmation prompts).
+  # The Windows runner may have PostgreSQL tools from unrelated build
+  # packages. Some are compiled with a fixed build-machine share path and
+  # will fail initdb after being moved into the installer. Always bundle the
+  # official EDB portable distribution instead of copying an arbitrary local
+  # PostgreSQL installation.
   $pgVersion = "17.7"
   $zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
   $zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
-  Write-Host "      no PostgreSQL tools on this machine - provisioning the portable"
-  Write-Host "      toolchain (PostgreSQL $pgVersion, about 330 MB) into $toolsFolder"
+  Write-Host "      provisioning the official portable EDB PostgreSQL $pgVersion toolchain into $toolsFolder"
   New-Item -ItemType Directory -Force -Path $toolsFolder | Out-Null
   $haveZip = $false
   if (Test-Path $zipFile) {
@@ -280,32 +257,21 @@ if (-not $pgBin) {
     if (-not $haveZip) { Remove-Item -Force $zipFile }
   }
   if (-not $haveZip) {
-    # curl.exe ships with Windows and speaks TLS 1.2 out of the box; the
-    # PowerShell 5.1 downloader on a fresh runner can be negotiated down to
-    # TLS 1.0 and fail against the CDN.
     & curl.exe -fsSL --retry 3 --retry-delay 2 -o $zipFile $zipUrl
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipFile)) {
-      Fail ("Could not download PostgreSQL tools from $zipUrl . Download the " +
-            "file in a browser, save it as $zipFile, and run this script again " +
-            "(or run scripts\install-postgres-portable.bat once).")
+      Fail ("Could not download the official EDB PostgreSQL archive from $zipUrl. The installer must not use unrelated system binaries.")
     }
   }
   if ((Get-Item $zipFile).Length -le 300000000) {
     Fail "The downloaded PostgreSQL archive looks truncated ($($zipFile)). Delete it and run this script again."
   }
-  # The archive unpacks into a top-level folder named pgsql - the same
-  # layout install-postgres-portable.bat produces. tar.exe handles the zip
-  # without loading it into memory first.
   & tar.exe -xf $zipFile -C $toolsFolder
-  if ($LASTEXITCODE -ne 0) {
-    Fail "The PostgreSQL archive at $zipFile could not be unpacked. Delete it and run this script again."
-  }
+  if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
   if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
-    Fail ("The PostgreSQL archive did not unpack to $portablePg . Run " +
-          "scripts\install-postgres-portable.bat once, then run this script again.")
+    Fail "The official EDB PostgreSQL archive did not unpack to $portablePg."
   }
   $pgBin = $portablePg
-  Write-Host "      portable PostgreSQL tools are ready at $portablePg"
+  Write-Host "      official EDB PostgreSQL tools are ready at $portablePg"
 }
 $pgFolder = Join-Path $backendFolder "pg"
 New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
@@ -332,6 +298,19 @@ foreach ($cand in $shareCandidates) {
 Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
 
 # The copy is only real if it runs from where it now sits.
+# Validate that this exact bundled distribution can initialize a portable
+# cluster after relocation; this catches binaries compiled against a build
+# machine's absolute share/timezone directory before shipping the installer.
+$probeData = Join-Path $env:TEMP ("kayan-pg-initdb-probe-" + [guid]::NewGuid().ToString("N"))
+$probeShare = Join-Path $pgFolder "share"
+try {
+  & (Join-Path $pgFolder "initdb.exe") -D $probeData -U postgres -A trust -E UTF8 --locale=C -L $probeShare
+  if ($LASTEXITCODE -ne 0) {
+    Fail "The bundled PostgreSQL initdb could not initialize with the packaged share directory. Do not ship this package."
+  }
+} finally {
+  if (Test-Path $probeData) { Remove-Item $probeData -Recurse -Force -ErrorAction SilentlyContinue }
+}
 foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {
   $probe = Join-Path $pgFolder $tool
   $line = & $probe --version 2>&1
