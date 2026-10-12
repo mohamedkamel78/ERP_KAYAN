@@ -6,6 +6,11 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import {
+  allowsOrigin,
+  configuredOrigins as corsConfiguredOrigins,
+} from './common/config/cors';
+import { secretsProblem as jwtSecretsProblem } from './common/config/jwt-secrets';
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
 
 async function bootstrap() {
@@ -13,6 +18,24 @@ async function bootstrap() {
     bufferLogs: true,
   });
   const logger = new Logger('Bootstrap');
+
+  // Signing keys first. Without them the program can serve its own login
+  // screen and then fail on the first sign-in with a message that names
+  // nothing, so the check belongs here, at start-up, where it is read by the
+  // person who started it rather than by the person trying to sign in.
+  //
+  // On a real installation that is a reason not to start at all: a program
+  // that cannot issue a token is not a program anyone can use. While
+  // developing, it is only a warning, because a checkout with no .env is a
+  // normal thing to have.
+  const secretsProblem = jwtSecretsProblem();
+  if (secretsProblem) {
+    if (process.env.NODE_ENV === 'production') {
+      logger.error(secretsProblem);
+      throw new Error(secretsProblem);
+    }
+    logger.warn(secretsProblem);
+  }
 
   app.setGlobalPrefix('api/v1');
 
@@ -34,25 +57,19 @@ async function bootstrap() {
   // ports breaks sign-in with a misleading "cannot reach the server" error.
   // Outside production every localhost origin is therefore accepted; in
   // production only the origins listed in CORS_ORIGINS are.
-  const configuredOrigins = (process.env.CORS_ORIGINS ?? '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+  const configuredOrigins = corsConfiguredOrigins(process.env.CORS_ORIGINS);
   const isProduction = process.env.NODE_ENV === 'production';
-  const isLanOrLocalOrigin =
-    /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+\.local)(:\d+)?$/;
 
   app.enableCors({
     origin: (
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean) => void,
     ) => {
-      // Requests without an Origin header come from clients that CORS does not
-      // apply to: native apps, curl, the mobile build.
-      if (!origin) return callback(null, true);
-      if (configuredOrigins.includes(origin)) return callback(null, true);
-      if (isLanOrLocalOrigin.test(origin)) return callback(null, true);
-      if (!isProduction) return callback(null, true);
+      // The rule itself lives in one place and is tested there: see
+      // common/config/cors.ts.
+      if (allowsOrigin(origin, configuredOrigins, isProduction)) {
+        return callback(null, true);
+      }
       logger.warn(`Blocked CORS request from origin: ${origin}`);
       return callback(null, false);
     },

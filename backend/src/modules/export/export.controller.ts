@@ -290,9 +290,18 @@ export class ExportController {
     filename: string,
   ) {
     response.setHeader('Content-Type', contentType);
+    // Two names, because a browser and Excel do not agree: the plain one for
+    // anything that only reads the first form, and the RFC 5987 one, which is
+    // the only form that can carry an Arabic name. Anything past the last
+    // slash is dropped — a name in a header is either a mistake or an
+    // attempt, and neither belongs in a save dialogue.
+    const bare = filename.split(/[\\/]/).pop() ?? 'download';
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${filename}"`,
+      /[\u0080-\uffff]/.test(bare)
+        ? `attachment; filename="${bare.replace(/[^\x20-\x7e]/g, '_')}"; `
+            + `filename*=UTF-8''${encodeURIComponent(bare)}`
+        : `attachment; filename="${bare}"`,
     );
     response.setHeader('Cache-Control', 'no-store');
     response.end(body);

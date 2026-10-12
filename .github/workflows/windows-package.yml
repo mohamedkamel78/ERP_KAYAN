@@ -31,6 +31,17 @@ on:
       - "pubspec.lock"
       - ".github/workflows/windows-package.yml"
     tags: ["v*"]
+  pull_request:
+    # Before a change is merged, prove on a real Windows machine that the
+    # package still builds and both deliverables still exist.
+    paths:
+      - "backend/**"
+      - "lib/**"
+      - "windows/**"
+      - "scripts/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/windows-package.yml"
   workflow_dispatch:
 
 permissions:
@@ -72,7 +83,21 @@ jobs:
           npm --version
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (Test-Path $iscc) { Write-Host "Inno Setup: $iscc" }
-          else { Write-Host "Inno Setup: not found - the installer step will be skipped" }
+          else { Write-Host "Inno Setup: not found yet - the next step installs it" }
+
+      - name: Install Inno Setup (the installer a customer runs)
+        shell: pwsh
+        run: |
+          # The package is the deliverable: both the folder zip AND the
+          # one-file installer must come out of every build, so the compiler
+          # that makes the installer is installed here rather than left to
+          # chance. Inno Setup is free and leaves no runtime dependency in
+          # the customer's installation.
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco could not install Inno Setup" }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup installed but ISCC.exe is not at $iscc" }
+          Write-Host "Inno Setup ready: $iscc"
 
       - name: Check that the two backend implementations still agree
         shell: pwsh
@@ -100,7 +125,12 @@ jobs:
           Write-Host "--- the end of the build log ---"
           Get-Content build\build-log.txt -Tail 60
           Write-Host "--- the build script exited with $code ---"
-          if ($code -ne 0) { throw "the build script failed with exit code $code" }
+          if ($code -ne 0) {
+            Get-Content build\build-log.txt -Tail 10 | ForEach-Object {
+              Write-Output ("::error::" + ($_ -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'))
+            }
+            throw "the build script failed with exit code $code"
+          }
 
       - name: Check that the result is really shippable
         shell: pwsh
@@ -148,6 +178,20 @@ jobs:
           $body = "The Windows build of commit ${{ github.sha }} did not finish.`n`n" + ($parts -join "`n`n")
           Set-Content -Path build\comment.md -Value $body -Encoding utf8
           gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -F body=@build\comment.md
+
+      - name: Check that both deliverables exist
+        shell: pwsh
+        run: |
+          # Two files are promised to the customer and both must come out of
+          # every build: the program folder as a zip, and the one-file
+          # installer. A run that produced only one of them is a failed run,
+          # not a partial success.
+          $zip = @(Get-ChildItem build\desktop -Filter "KAYAN-ERP-windows.zip" -File -ErrorAction SilentlyContinue)
+          $setup = @(Get-ChildItem build\desktop -Filter "KAYAN-ERP-Setup-*.exe" -File -ErrorAction SilentlyContinue)
+          if ($zip.Count -eq 0) { throw "KAYAN-ERP-windows.zip was not produced" }
+          if ($setup.Count -eq 0) { throw "the installer (KAYAN-ERP-Setup-*.exe) was not produced" }
+          Write-Host "deliverables present:"
+          $zip + $setup | ForEach-Object { Write-Host ("  " + $_.Name + "  " + [math]::Round($_.Length / 1MB, 1) + " MB") }
 
       - name: Show what was produced
         shell: pwsh

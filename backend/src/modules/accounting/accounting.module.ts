@@ -1,7 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
 import { AuditModule } from '../../common/audit/audit.module';
-import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { AccountMapService } from './account-map.service';
 import { ChartOfAccountsController } from './chart-of-accounts.controller';
 import { ChartOfAccountsService } from './chart-of-accounts.service';
@@ -26,7 +24,6 @@ import { PostingService } from './posting.service';
       FiscalPeriodsService,
       AccountMapService,
       PostingService,
-      { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
   // Sales, purchases and reports all need to write or read the ledger.
   exports: [DocumentNumberService, AccountMapService, PostingService, FiscalPeriodsService],
