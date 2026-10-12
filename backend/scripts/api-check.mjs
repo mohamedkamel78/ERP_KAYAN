@@ -455,6 +455,11 @@ async function main() {
     }),
     'customers.csv',
   );
+  // Counted before and after, not expected to be empty: the database may
+  // already hold customers (the browser check imports one before this runs),
+  // and what matters is that the dry run added none.
+  const beforeDry = await call('/parties/customers');
+  const countBefore = beforeDry.data?.items?.length ?? -2;
   const dryRun = await fetch(
     `${API}/import/customers?dryRun=true&mode=insert`,
     { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: badRows },
@@ -468,8 +473,8 @@ async function main() {
   const stillEmpty = await call('/parties/customers');
   check(
     'a dry run writes nothing',
-    (stillEmpty.data?.items?.length ?? -1) === 0,
-    `${stillEmpty.data?.items?.length ?? -1} customer(s)`,
+    countBefore >= 0 && (stillEmpty.data?.items?.length ?? -1) === countBefore,
+    `${countBefore} customer(s) before, ${stillEmpty.data?.items?.length ?? -1} after`,
   );
 
   // ──────────────────────────────────────────────── 7. the company reset

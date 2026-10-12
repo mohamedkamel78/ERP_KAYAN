@@ -36,15 +36,19 @@ def main() -> int:
             seen.add(line)
             refused.append(line)
     state = [l for l in lines if re.match(r'^(AUTH|STORAGE|CONSOLE) ', l)]
-    tail = lines[-12:]
+    # What the screen said when a step could not find what it wanted: the
+    # words on it are the only way to tell a wrong guess from a wrong screen.
+    screens = [l for l in lines if re.match(r'^(SCREEN|LABELS|INPUTS) ', l)]
 
+    # Five annotations at most, and the verdict first. The passed names are
+    # left out: the verdict line already says how many passed, and the names
+    # are in the transcript artifact.
     sections = [
         ('verdict', summary + verdict),
+        ('what the screen showed at a failed step', screens[-10:] or ['no screen was recorded']),
         ('what was done', done[-20:] or ['no clicks recorded']),
-        ('passed', [f'{len(passed)} passed: ' + ' | '.join(passed)]),
-        ('refused by the server', refused[:20] or ['nothing refused']),
+        ('refused by the server', refused[:12] or ['nothing refused']),
         ('sign-in state', state[:12] or ['no sign-in state recorded']),
-        ('end of the transcript', tail),
     ]
 
     messages = []
