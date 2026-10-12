@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   demo-backup:
@@ -91,6 +91,22 @@ jobs:
             exit "$status"
           fi
 
+      - name: Publish the restore-ready company JSON for direct download
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p demo-data
+          cp backend/dist-demo/kayan-company-backup-*.json demo-data/kayan-company-backup-demo.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add demo-data/kayan-company-backup-demo.json
+          if git diff --cached --quiet; then
+            echo "The direct-download demo JSON is already current."
+            exit 0
+          fi
+          git commit -m "chore(demo): publish verified company JSON [skip ci]"
+          git push
       - name: Fingerprint the file
         id: fingerprint
         run: |
