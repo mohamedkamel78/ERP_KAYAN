@@ -259,7 +259,8 @@ if ((Get-Item $installerFile).Length -le 300000000) {
 }
 if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
 New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-& $installerFile --mode unattended --unattendedmodeui none --prefix "$extractRoot" --extract-only 1
+$traceFile = Join-Path $env:TEMP "kayan-postgresql-extract-trace.log"
+& $installerFile --mode unattended --unattendedmodeui none --prefix "$extractRoot" --extract-only yes --debugtrace "$traceFile"
 if ($LASTEXITCODE -ne 0) {
   Fail "The official PostgreSQL installer could not extract its runtime binaries."
 }
@@ -276,7 +277,8 @@ if (-not $initDbCandidate) {
   $layout = if (Test-Path $extractRoot) {
     (Get-ChildItem -Path $extractRoot -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 -ExpandProperty FullName) -join [Environment]::NewLine
   } else { "(extract directory was not created)" }
-  Fail ("The PostgreSQL installer returned success, but initdb.exe was not found. Extracted files:" + [Environment]::NewLine + $layout)
+  $trace = if (Test-Path $traceFile) { Get-Content $traceFile -Tail 50 | Out-String } else { "(EDB trace was not created)" }
+  Fail ("The PostgreSQL installer returned success, but initdb.exe was not found. Extracted files:" + [Environment]::NewLine + $layout + [Environment]::NewLine + "EDB trace:" + [Environment]::NewLine + $trace)
 }
 $pgBin = $initDbCandidate.Directory.FullName
 Write-Host "      official EDB PostgreSQL server binaries extracted"
