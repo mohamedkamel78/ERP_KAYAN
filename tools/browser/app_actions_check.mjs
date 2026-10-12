@@ -191,6 +191,22 @@ async function main() {
       }),
     );
 
+    // Anything the server could not do. A 500 the server logged is worth
+    // more than a click that found nothing, so each one is printed with the
+    // sentence the server sent back about it.
+    const serverErrors = [];
+    page.on('response', async (response) => {
+      if (response.status() < 500) return;
+      let body = '';
+      try {
+        body = (await response.text()).replace(/\s+/g, ' ').slice(0, 300);
+      } catch {
+        body = '(the body was gone before it could be read)';
+      }
+      serverErrors.push(`${response.status()} ${response.url()} ${body}`);
+      console.log(`SERVER ${response.status()} ${response.url()} ${body}`);
+    });
+
     // What the server answered. The one response that matters most is the
     // sign-in: if the screen does not move, the reason is in that status
     // code and not in the clicking.
@@ -679,6 +695,11 @@ async function main() {
       'the page raised no uncaught errors of its own',
       consoleErrors.filter((line) => !/favicon|fonts\.g/i.test(line)).length === 0,
       consoleErrors.slice(0, 3).join(' / ') || 'none',
+    );
+    check(
+      'the server answered every request the program made',
+      serverErrors.length === 0,
+      serverErrors.slice(0, 3).join(' | ') || 'no 5xx was seen',
     );
   } finally {
     await browser.close().catch(() => {});

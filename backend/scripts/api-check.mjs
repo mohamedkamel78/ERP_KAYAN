@@ -582,6 +582,60 @@ async function main() {
     );
   }
 
+  // ─────────────────────────────────────────────────────── reaching it from
+  // Another machine on the network. The program runs on one desk and is
+  // opened from a tablet or a second desk beside it, and a browser will not
+  // let a page read a reply unless the reply names the page's own address.
+  {
+    const ask = async (origin, init = {}) => {
+      const response = await fetch(`${API}/health`, {
+        ...init,
+        headers: { ...(init.headers ?? {}), Origin: origin },
+        redirect: 'manual',
+      });
+      return {
+        status: response.status,
+        allowed: response.headers.get('access-control-allow-origin'),
+        credentials: response.headers.get('access-control-allow-credentials'),
+      };
+    };
+
+    for (const origin of [
+      'http://192.168.1.42:8080',
+      'http://10.0.0.7:3000',
+      'http://172.16.4.3:8000',
+      'http://kayan-office.local',
+    ]) {
+      const reply = await ask(origin);
+      check(
+        `a page opened on the network at ${origin} is allowed in`,
+        reply.allowed === origin && reply.credentials === 'true',
+        `allow-origin=${reply.allowed ?? 'absent'}, credentials=${reply.credentials ?? 'absent'}`,
+      );
+    }
+
+    const preflight = await ask('http://192.168.1.42:8080', {
+      method: 'OPTIONS',
+      headers: {
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+      },
+    });
+    check(
+      'the browser’s own pre-flight for a signed request is answered',
+      preflight.status < 400 && preflight.allowed === 'http://192.168.1.42:8080',
+      `status ${preflight.status}, allow-origin=${preflight.allowed ?? 'absent'}`,
+    );
+
+    // A client that is not a page sends no Origin at all.
+    const noOrigin = await fetch(`${API}/health`, { redirect: 'manual' });
+    check(
+      'a client that sends no Origin (curl, the mobile build) is not turned away',
+      noOrigin.status === 200,
+      `status ${noOrigin.status}`,
+    );
+  }
+
   const failures = results.filter((result) => !result.ok);
   console.log(
     `\n${results.length - failures.length}/${results.length} checks passed` +
