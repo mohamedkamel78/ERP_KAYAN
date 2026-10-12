@@ -597,8 +597,21 @@ async function main() {
       const list = Array.isArray(names) ? names : [names];
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        const at = await findNode(list, []);
+        let at = await findNode(list, []);
         if (at) {
+          // A control that is below the fold still has coordinates, but a
+          // mouse click at a point outside the window presses nothing at all -
+          // which is how a button that works perfectly for a person reads as
+          // "nothing arrived". Flutter scrolls its own canvas, so the wheel
+          // does what scrolling the window cannot: bring the control up,
+          // measure it again, then click where it actually is.
+          const height = page.viewport()?.height ?? 900;
+          if (at.y > height - 60) {
+            await page.mouse.wheel({ deltaY: Math.round(at.y - height / 2) });
+            await wait(700);
+            const moved = await findNode(list, []);
+            if (moved) at = moved;
+          }
           log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
           await page.mouse.click(at.x, at.y);
           return true;
