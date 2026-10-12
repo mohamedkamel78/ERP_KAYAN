@@ -253,6 +253,12 @@ export class FullBackupService {
       const localAppData =
         process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
       dirs.push(join(localAppData, 'kayan-tools', 'pgsql', 'bin'));
+      // Production PostgreSQL lives under ProgramData so standard Windows
+      // users can run the backup/restore screens without a separate install.
+      const programData = process.env.ProgramData ?? process.env.PROGRAMDATA;
+      if (programData) {
+        dirs.push(join(programData, 'KAYAN-ERP', 'pgsql', 'bin'));
+      }
     }
     return dirs;
   }

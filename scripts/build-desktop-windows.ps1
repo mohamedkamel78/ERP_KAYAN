@@ -243,86 +243,24 @@ $portablePg = Join-Path $toolsFolder "pgsql\bin"
 $pgVersion = "16.15"
 $installerUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64.exe"
 $installerFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-installer.exe"
-$extractRoot = Join-Path $env:TEMP "kayan-postgresql-runtime-$pgVersion"
-Write-Host "      downloading the official EDB PostgreSQL $pgVersion installer"
+$pgFolder = Join-Path $backendFolder "pg"
+$embeddedInstaller = Join-Path $pgFolder "postgresql-installer.exe"
+Write-Host "      downloading the official EDB PostgreSQL $pgVersion installer for first-run installation"
 if ((Test-Path $installerFile) -and ((Get-Item $installerFile).Length -lt 20000000)) { Remove-Item -Force $installerFile }
 if (-not (Test-Path $installerFile)) {
   & curl.exe -fsSL --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors -o $installerFile $installerUrl
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installerFile)) { Fail ("Could not download the official EDB PostgreSQL installer from " + $installerUrl) }
 }
 if ((Get-Item $installerFile).Length -lt 20000000) { Fail "The PostgreSQL installer download is incomplete or unexpectedly small." }
-if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
-New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
-$extractLog = Join-Path $env:TEMP "kayan-postgresql-extract.log"
-Write-Host "      extracting EDB binaries with the documented --extract-only yes option"
-& $installerFile --mode unattended --unattendedmodeui none --extract-only yes --prefix "$extractRoot" --debugtrace "$extractLog"
-if ($LASTEXITCODE -ne 0) {
-  $detail = if (Test-Path $extractLog) { (Get-Content $extractLog -Tail 30) -join [Environment]::NewLine } else { "(no EDB installer trace was written)" }
-  Fail ("The official PostgreSQL installer failed to extract binaries:" + [Environment]::NewLine + $detail)
-}
-$initDbCandidate = Get-ChildItem -Path $extractRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue |
-  Where-Object { (Test-Path (Join-Path $_.Directory.FullName "postgres.exe")) -and (Test-Path (Join-Path $_.Directory.FullName "pg_dump.exe")) } |
-  Select-Object -First 1
-if (-not $initDbCandidate) {
-  $layout = if (Test-Path $extractRoot) {
-    (Get-ChildItem -Path $extractRoot -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 80 -ExpandProperty FullName) -join [Environment]::NewLine
-  } else { "(extract directory was not created)" }
-  $detail = if (Test-Path $extractLog) { (Get-Content $extractLog -Tail 30) -join [Environment]::NewLine } else { "(no EDB installer trace was written)" }
-  Fail ("EDB reported extraction success but no PostgreSQL server binaries were found. Extracted files:" + [Environment]::NewLine + $layout + [Environment]::NewLine + "Installer trace:" + [Environment]::NewLine + $detail)
-}
-$pgBin = $initDbCandidate.Directory.FullName
-if ((Get-PeMachine (Join-Path $pgBin "initdb.exe")) -ne 0x8664) { Fail "The extracted PostgreSQL initdb is not a Windows x64 executable." }
-Write-Host ("      official EDB PostgreSQL binaries extracted from " + $pgBin)
-$pgFolder = Join-Path $backendFolder "pg"
-$pgRoot = Split-Path -Parent $pgBin
-$pgBinFolder = Join-Path $pgFolder "bin"
-New-Item -ItemType Directory -Force -Path $pgBinFolder | Out-Null
-foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe")) {
-  $src = Join-Path $pgBin $tool
-  if (Test-Path $src) {
-    Copy-Item $src $pgBinFolder -Force
-  }
-}
-# Keep PostgreSQL's expected bin/ and share/ sibling layout. Its relocatable
-# path logic uses the executable's location to find timezone and catalog data.
-Get-ChildItem $pgBin -Filter "*.dll" | Copy-Item -Destination $pgBinFolder -Force
-$pgRoot = Split-Path -Parent $pgBin
-$shareSource = Join-Path $pgRoot "share"
-if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
-  $shareSource = Join-Path $pgBin "share"
-}
-if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
-  Fail "The PostgreSQL installer did not provide the required share/postgres.bki data."
-}
-Copy-Item $shareSource (Join-Path $pgFolder "share") -Recurse -Force
-$libSource = Join-Path $pgRoot "lib"
-if (-not (Test-Path (Join-Path $libSource "plpgsql.dll"))) {
-  Fail "The EDB archive is missing the required PostgreSQL lib/plpgsql.dll runtime."
-}
-Copy-Item $libSource (Join-Path $pgFolder "lib") -Recurse -Force
-Write-Host "      PostgreSQL runtime lib/ directory bundled"
+if ((Get-PeMachine $installerFile) -ne 0x8664) { Fail "The embedded PostgreSQL installer is not a Windows x64 executable." }
+New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
+Copy-Item $installerFile $embeddedInstaller -Force
+if ((Get-Item $embeddedInstaller).Length -lt 20000000) { Fail "The PostgreSQL installer was not embedded into the KAYAN package." }
+Write-Host ("      official EDB PostgreSQL installer embedded at " + $embeddedInstaller)
+# The official EDB installer is executed by KAYAN-Setup during installation.
+# This avoids shipping binaries built with non-relocatable build-time paths.
 Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
 Copy-Item (Join-Path $root "scripts\install-kayan-database.ps1") (Join-Path $backendFolder "scripts\install-kayan-database.ps1") -Force
-
-# Probe the exact packaged bin/share layout before producing an installer.
-$probeData = Join-Path $env:TEMP ("kayan-pg-initdb-probe-" + [guid]::NewGuid().ToString("N"))
-$probeShare = Join-Path $pgFolder "share"
-try {
-  & (Join-Path $pgBinFolder "initdb.exe") -D $probeData -U postgres -A trust -E UTF8 --locale=C -L $probeShare
-  if ($LASTEXITCODE -ne 0) {
-    Fail "The bundled PostgreSQL initdb could not initialize with the packaged bin/share layout. Do not ship this package."
-  }
-} finally {
-  if (Test-Path $probeData) { Remove-Item $probeData -Recurse -Force -ErrorAction SilentlyContinue }
-}
-foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {
-  $probe = Join-Path $pgBinFolder $tool
-  $line = & $probe --version 2>&1
-  if ($LASTEXITCODE -ne 0 -or -not ("$line" -match [regex]::Escape($tool.Replace(".exe", "")))) {
-    Fail "The bundled $tool did not answer --version from $pgBinFolder. The package is not shippable."
-  }
-  Write-Host "      bundled $($line | Select-Object -First 1)"
-}
 
 # ------------------------------------------------------------- 6. client
 Step "6/8" "Building the client (Flutter, Windows, release)"

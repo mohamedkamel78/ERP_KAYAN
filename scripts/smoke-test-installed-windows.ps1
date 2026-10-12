@@ -25,6 +25,16 @@ $serviceInfo = Get-CimInstance Win32_Service -Filter "Name='KAYAN_PostgreSQL'" -
 if ($serviceInfo.PathName -notlike "*$env:ProgramData\KAYAN-ERP\pgsql*") {
   throw ("KAYAN_PostgreSQL is not using its persistent ProgramData runtime: " + $serviceInfo.PathName)
 }
+$pgRuntime = Join-Path $env:ProgramData "KAYAN-ERP\pgsql"
+foreach ($relative in @("bin\initdb.exe", "bin\pg_ctl.exe", "bin\postgres.exe", "bin\psql.exe", "bin\pg_dump.exe", "bin\pg_restore.exe", "share\postgres.bki", "share\timezone", "share\timezonesets", "lib\plpgsql.dll")) {
+  $runtimePath = Join-Path $pgRuntime $relative
+  if (-not (Test-Path $runtimePath)) { throw ("Installed PostgreSQL runtime is missing " + $relative) }
+}
+foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "postgres.exe")) {
+  $toolPath = Join-Path $pgRuntime ("bin\" + $tool)
+  $toolVersion = & $toolPath --version 2>&1
+  if ($LASTEXITCODE -ne 0 -or "$toolVersion" -notmatch [regex]::Escape($tool.Replace(".exe", ""))) { throw ("Installed PostgreSQL tool failed --version: " + $toolPath + " / " + "$toolVersion") }
+}
 $settings = Join-Path $env:ProgramData "KAYAN-ERP\kayan.env"
 if (-not (Test-Path $settings)) { throw "The installer did not write the shared runtime settings file." }
 

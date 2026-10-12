@@ -28,6 +28,7 @@ param(
   [string]$DataDir = '',
   [string]$PgBinDir = '',
   [string]$AppPassword = '',
+  [string]$PostgresPassword = '',
   [switch]$Force
 )
 
@@ -99,6 +100,8 @@ function Test-PortListening([int]$p) {
 
 $pgDir = Find-PgBin
 $targetDataDir = Get-KayanDataDir
+if (-not $PostgresPassword -and $env:KAYAN_POSTGRES_ADMIN_PASSWORD) { $PostgresPassword = $env:KAYAN_POSTGRES_ADMIN_PASSWORD }
+$script:KayanPostgresConfigChanged = $false
 
 switch ($Action) {
   'status' {
@@ -163,14 +166,13 @@ switch ($Action) {
     $confFile = Join-Path $targetDataDir "postgresql.conf"
     if (Test-Path $confFile) {
       $conf = Get-Content $confFile -Raw
-      if ($conf -match "port\s*=\s*\d+") {
-        $conf = $conf -replace "port\s*=\s*\d+", "port = $Port"
-      } else {
-        $conf += "`nport = $Port`n"
-      }
-      if ($conf -notmatch "listen_addresses") {
-        $conf += "`nlisten_addresses = '127.0.0.1'`n"
-      }
+      $beforeConfig = $conf
+      $conf = [regex]::Replace($conf, '(?m)^[ \t]*#?[ \t]*port[ \t]*=[^\r\n]*$', "port = $Port")
+      if ($conf -notmatch '(?m)^[ \t]*port[ \t]*=') { $conf += [Environment]::NewLine + "port = $Port" + [Environment]::NewLine }
+      # Keep PostgreSQL loopback-only; clients must reach the API, not the DB directly.
+      $conf = [regex]::Replace($conf, "(?m)^[ \t]*#?[ \t]*listen_addresses[ \t]*=[^\r\n]*$", "listen_addresses = '127.0.0.1'")
+      if ($conf -notmatch "(?m)^[ \t]*listen_addresses[ \t]*=") { $conf += [Environment]::NewLine + "listen_addresses = '127.0.0.1'" + [Environment]::NewLine }
+      if ($conf -ne $beforeConfig) { $script:KayanPostgresConfigChanged = $true }
       Set-Content -Path $confFile -Value $conf -Encoding UTF8
     }
 
@@ -206,18 +208,24 @@ switch ($Action) {
     }
 
     $escapedPw = $AppPassword.Replace("'", "''")
+    if ($PostgresPassword) { $env:PGPASSWORD = $PostgresPassword }
     $checkRole = & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -t -A -c "SELECT 1 FROM pg_roles WHERE rolname='erp_app';" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Cannot authenticate to the PostgreSQL administrator account. Existing data was not changed." }
     if ("$checkRole" -match "1") {
       & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -c "ALTER ROLE erp_app WITH LOGIN CREATEDB PASSWORD '$escapedPw';" | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not configure the erp_app database role." }
       Write-Host "  [OK] Synchronized password for existing role 'erp_app'." -ForegroundColor Green
     } else {
       & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -c "CREATE ROLE erp_app WITH LOGIN CREATEDB PASSWORD '$escapedPw';" | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not create the erp_app database role." }
       Write-Host "  [OK] Created database role 'erp_app'." -ForegroundColor Green
     }
 
     $checkDb = & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -t -A -c "SELECT 1 FROM pg_database WHERE datname='erp_kayan';" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Could not verify the erp_kayan database." }
     if ("$checkDb" -notmatch "1") {
       & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -c "CREATE DATABASE erp_kayan OWNER erp_app;" | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Could not create the erp_kayan database." }
       Write-Host "  [OK] Created database 'erp_kayan'." -ForegroundColor Green
     } else {
       Write-Host "  [OK] Existing database 'erp_kayan' verified (data preserved)." -ForegroundColor Green
@@ -241,7 +249,7 @@ switch ($Action) {
 HOST="0.0.0.0"
 PORT=3000
 DATABASE_URL="postgresql://erp_app:$AppPassword@127.0.0.1:$Port/erp_kayan?schema=public"
-ADMIN_DATABASE_URL="postgresql://postgres@127.0.0.1:$Port/postgres"
+ADMIN_DATABASE_URL="postgresql://postgres:$PostgresPassword@127.0.0.1:$Port/postgres"
 JWT_ACCESS_SECRET="$jwtAccess"
 JWT_REFRESH_SECRET="$jwtRefresh"
 JWT_ACCESS_TTL=900
