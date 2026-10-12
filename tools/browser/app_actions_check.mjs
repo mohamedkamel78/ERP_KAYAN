@@ -162,11 +162,19 @@ async function main() {
     ],
   });
 
+  browser.on('disconnected', () => log('DIED the browser went away'));
+
   try {
     const page = await browser.newPage();
     page.setDefaultTimeout(45000);
     await page.setViewport({ width: 1440, height: 900 });
     await page.setExtraHTTPHeaders({ 'Accept-Language': 'ar-EG,ar;q=0.9' });
+
+    // A Flutter web page that runs out of memory or hits a fatal engine
+    // error closes the page underneath the check; without this, the run
+    // simply stops and the exit code is all there is to go on.
+    page.on('error', (error) => log(`DIED the page crashed: ${error.message}`));
+    page.on('close', () => log('DIED the page was closed'));
 
     const consoleErrors = [];
     page.on('pageerror', (error) => {
@@ -736,6 +744,16 @@ async function main() {
 }
 
 mkdirSync(OUT_DIR, { recursive: true });
+
+// Whatever ends this run should say so on its way out. A browser that goes
+// away, a promise nobody awaited and a page that crashes all used to leave
+// nothing behind but an exit code.
+process.on('unhandledRejection', (reason) => {
+  log(`DIED a promise was rejected and nobody caught it: ${reason?.stack ?? reason}`);
+});
+process.on('uncaughtException', (error) => {
+  log(`DIED an exception escaped: ${error?.stack ?? error}`);
+});
 
 main()
   .then((code) => {
