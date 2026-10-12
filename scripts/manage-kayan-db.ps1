@@ -228,9 +228,11 @@ switch ($Action) {
       Write-Host "  [OK] Existing database 'erp_kayan' verified (data preserved)." -ForegroundColor Green
     }
 
-    # 5. Persist settings to %APPDATA%\KAYAN-ERP\kayan.env
-    $appData = if ($env:APPDATA) { $env:APPDATA } else { "$env:USERPROFILE\AppData\Roaming" }
-    $kayanDir = Join-Path $appData "KAYAN-ERP"
+    # 5. Persist settings in the machine configuration directory.
+    # The installer runs elevated, while the app is launched as the normal
+    # user. ProgramData gives both processes one stable path; lock the file
+    # down to the installing user's SID, SYSTEM and local Administrators.
+    $kayanDir = Join-Path $env:ProgramData "KAYAN-ERP"
     New-Item -ItemType Directory -Force -Path $kayanDir | Out-Null
     $envFile = Join-Path $kayanDir "kayan.env"
 
@@ -251,7 +253,13 @@ JWT_ACCESS_TTL=900
 JWT_REFRESH_TTL=1209600
 "@
     Set-Content -Path $envFile -Value $envContent -Encoding UTF8
-    Write-Host "  [OK] Persisted runtime configuration to: $envFile" -ForegroundColor Green
+
+    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    & icacls.exe $envFile /inheritance:r /grant:r "*$($sid):(R)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      throw "Could not secure the KAYAN runtime configuration file ACL."
+    }
+    Write-Host "  [OK] Persisted protected runtime configuration to: $envFile" -ForegroundColor Green
 
     Write-Host "`n=== Database setup finished successfully ===" -ForegroundColor Green
     exit 0
