@@ -170,40 +170,31 @@ switch ($Action) {
       Set-Content -Path $confFile -Value $conf -Encoding UTF8
     }
 
-    # 3. Register and start Windows Service
+    # 3. Register and start a persistent Windows service. A background pg_ctl
+    # process is not sufficient: it would disappear on reboot.
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if (-not $svc) {
       Write-Host "  Registering Windows Service '$ServiceName' on port $Port..." -ForegroundColor Cyan
       & $pgCtl register -N $ServiceName -D $targetDataDir -o "-p $Port" -S auto
-      if ($LASTEXITCODE -ne 0) {
-        Write-Host "  Note: Could not register Windows service (needs administrator rights). Running via pg_ctl start." -ForegroundColor Yellow
-      } else {
-        Write-Host "  [OK] Service registered." -ForegroundColor Green
+      $registerExitCode = $LASTEXITCODE
+      $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+      if (-not $svc) {
+        Write-Host "  pg_ctl register returned $registerExitCode; using New-Service fallback." -ForegroundColor Yellow
+        $serviceCommand = '"' + $pgCtl + '" runservice -N "' + $ServiceName + '" -D "' + $targetDataDir + '" -o "-p ' + $Port + '"'
+        New-Service -Name $ServiceName -DisplayName "KAYAN ERP PostgreSQL" -Description "Dedicated local PostgreSQL database for KAYAN ERP." -BinaryPathName $serviceCommand -StartupType Automatic | Out-Null
+        $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
       }
     }
-
-    # Start service if registered, otherwise start with pg_ctl
-    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($svc) {
-      if ($svc.Status -ne 'Running') {
-        Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
-      }
-    }
-    if (-not (Test-PortListening ([int]$Port))) {
-      & $pgCtl start -D $targetDataDir -o "-p $Port" -w -t 15
-    }
-
-    # Wait for port to listen
+    if (-not $svc) { throw "Could not register the persistent Windows service '$ServiceName'." }
+    Set-Service -Name $ServiceName -StartupType Automatic
+    if ($svc.Status -ne "Running") { Start-Service -Name $ServiceName -ErrorAction Stop }
     $attempts = 0
-    while (-not (Test-PortListening ([int]$Port)) -and $attempts -lt 20) {
+    while (-not (Test-PortListening ([int]$Port)) -and $attempts -lt 30) {
       Start-Sleep -Seconds 1
       $attempts++
     }
-    if (-not (Test-PortListening ([int]$Port))) {
-      Write-Error "PostgreSQL did not start on port $Port within 20 seconds."
-      exit 1
-    }
-    Write-Host "  [OK] PostgreSQL is listening on 127.0.0.1:$Port." -ForegroundColor Green
+    if (-not (Test-PortListening ([int]$Port))) { throw "Windows service '$ServiceName' did not start PostgreSQL on port $Port." }
+    Write-Host "  [OK] Persistent service '$ServiceName' is running on 127.0.0.1:$Port." -ForegroundColor Green
 
     # 4. Provision erp_app role and erp_kayan database
     if (-not $AppPassword) {

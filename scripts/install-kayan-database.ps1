@@ -19,10 +19,6 @@ if ($process.ExitCode -ne 0) { throw ("Database provisioning failed with exit co
 $settings = Join-Path $logDir "kayan.env"
 if (-not (Test-Path $settings)) { throw ("The protected runtime settings were not written. Read " + $stdout + " and " + $stderr) }
 $service = Get-Service -Name "KAYAN_PostgreSQL" -ErrorAction SilentlyContinue
-if ($service) {
-  if ($service.Status -ne "Running") { throw ("KAYAN_PostgreSQL did not reach Running state. Read " + $stdout + " and " + $stderr) }
-} else {
-  $listening = Test-NetConnection -ComputerName "127.0.0.1" -Port 5433 -InformationLevel Quiet
-  if (-not $listening) { throw ("PostgreSQL was not registered as a service and port 5433 is not listening. Read " + $stdout + " and " + $stderr) }
-}
+if (-not $service) { throw ("KAYAN_PostgreSQL was not registered. Read " + $stdout + " and " + $stderr) }
+if ($service.Status -ne "Running") { throw ("KAYAN_PostgreSQL did not reach Running state. Read " + $stdout + " and " + $stderr) }
 Write-Host "KAYAN database provisioning completed successfully."

@@ -4,10 +4,22 @@ param([string]$SetupPath = "build\desktop\KAYAN-Setup.exe")
 
 $ErrorActionPreference = "Stop"
 $setup = (Resolve-Path $SetupPath).Path
-$install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -PassThru
-if ($install.ExitCode -ne 0) { throw ("KAYAN-Setup.exe failed with exit code " + $install.ExitCode) }
+$installLog = Join-Path $env:TEMP "kayan-setup-smoke.log"
+$install = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", ("/LOG=" + $installLog)) -Wait -PassThru
+$dbLog = Join-Path $env:ProgramData "KAYAN-ERP\installer-db-setup.log"
+$dbError = Join-Path $env:ProgramData "KAYAN-ERP\installer-db-setup-error.log"
+if ($install.ExitCode -ne 0) {
+  $details = @()
+  foreach ($path in @($dbLog, $dbError, $installLog)) { if (Test-Path $path) { $details += ("--- " + $path + " ---"); $details += Get-Content $path -Tail 80 } }
+  throw ("KAYAN-Setup.exe failed with exit code " + $install.ExitCode + [Environment]::NewLine + ($details -join [Environment]::NewLine))
+}
 
-$service = Get-Service -Name "KAYAN_PostgreSQL" -ErrorAction Stop
+$service = Get-Service -Name "KAYAN_PostgreSQL" -ErrorAction SilentlyContinue
+if (-not $service) {
+  $details = @()
+  foreach ($path in @($dbLog, $dbError, $installLog)) { if (Test-Path $path) { $details += ("--- " + $path + " ---"); $details += Get-Content $path -Tail 80 } }
+  throw ("KAYAN_PostgreSQL was not installed as a persistent service." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
+}
 if ($service.Status -ne "Running") { throw "The installer did not start KAYAN_PostgreSQL." }
 $settings = Join-Path $env:ProgramData "KAYAN-ERP\kayan.env"
 if (-not (Test-Path $settings)) { throw "The installer did not write the shared runtime settings file." }
