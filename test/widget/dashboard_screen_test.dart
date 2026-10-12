@@ -51,9 +51,11 @@ void main() {
   Future<void> pumpDashboard(
     WidgetTester tester, {
     Locale locale = const Locale('ar'),
-    Map<String, dynamic> company = testCompany,
-    List<Map<String, dynamic>> branches = testBranches,
+    Map<String, dynamic>? company,
+    List<Map<String, dynamic>>? branches,
   }) async {
+    final effectiveCompany = company ?? testCompany;
+    final effectiveBranches = branches ?? testBranches;
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -62,10 +64,10 @@ void main() {
             FakeChartOfAccountsController.new,
           ),
           companyProfileProvider.overrideWith(
-            () => FakeCompanyProfileController(initialData: company),
+            () => FakeCompanyProfileController(initialData: effectiveCompany),
           ),
           branchesProvider.overrideWith(
-            () => FakeBranchesController(initialData: branches),
+            () => FakeBranchesController(initialData: effectiveBranches),
           ),
         ],
         child: wrapWithApp(child: const DashboardScreen(), locale: locale),
