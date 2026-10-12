@@ -1,5 +1,6 @@
-import 'dart:convert';
+import 'package:erp_kayan/features/accounting/domain/entities/account.dart';
 import 'package:erp_kayan/features/accounting/presentation/providers/chart_of_accounts_providers.dart';
+import 'package:erp_kayan/features/auth/domain/entities/app_user.dart';
 import 'package:erp_kayan/features/auth/presentation/providers/auth_providers.dart';
 import 'package:erp_kayan/features/dashboard/presentation/screens/dashboard_screen.dart';
 import 'package:erp_kayan/features/settings/presentation/providers/company_providers.dart';
@@ -58,7 +59,9 @@ void main() {
       ProviderScope(
         overrides: [
           authControllerProvider.overrideWith(() => FakeAuthController()),
-          chartOfAccountsProvider.overrideWith((ref) => Stream.value(const [])),
+          chartOfAccountsProvider.overrideWith(
+            () => FakeChartOfAccountsController(),
+          ),
           companyProfileProvider.overrideWith(
             () => FakeCompanyProfileController(initialData: company),
           ),
@@ -109,7 +112,12 @@ void main() {
 
 class FakeAuthController extends AuthController {
   @override
-  Future<dynamic> build() async => testUser;
+  Future<AppUser?> build() async => testUser;
+}
+
+class FakeChartOfAccountsController extends ChartOfAccountsController {
+  @override
+  Future<List<Account>> build() async => const [];
 }
 
 class FakeCompanyProfileController extends CompanyProfileController {
