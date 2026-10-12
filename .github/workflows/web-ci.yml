@@ -85,10 +85,8 @@ jobs:
               cat /tmp/analyze.txt
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            for severity in error warning info; do
-              grep -E "^ *${severity} •" /tmp/analyze.txt | head -10 | while IFS= read -r line; do
-                echo "::${severity}::${line}"
-              done
+            head -n 25 /tmp/analyze.txt | while IFS= read -r line; do
+              echo "::error::${line}"
             done
           fi
           exit "$status"

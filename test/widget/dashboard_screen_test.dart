@@ -58,9 +58,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          authControllerProvider.overrideWith(() => FakeAuthController()),
+          currentUserProvider.overrideWithValue(testUser),
           chartOfAccountsProvider.overrideWith(
-            () => FakeChartOfAccountsController(),
+            FakeChartOfAccountsController.new,
           ),
           companyProfileProvider.overrideWith(
             () => FakeCompanyProfileController(initialData: company),
@@ -108,11 +108,6 @@ void main() {
       expect(find.textContaining('Headquarters'), findsWidgets);
     },
   );
-}
-
-class FakeAuthController extends AuthController {
-  @override
-  Future<AppUser?> build() async => testUser;
 }
 
 class FakeChartOfAccountsController extends ChartOfAccountsController {
