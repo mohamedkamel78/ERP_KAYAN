@@ -342,6 +342,48 @@ async function main() {
       );
     });
 
+    // A second tab belongs to this program: the print button opens one, and
+    // the app builds that address by itself. A refusal over there is invisible
+    // to a listener attached over here, which is how a print page that asked
+    // for the chart of accounts without a credential could end up blamed on
+    // the import screen. Every page this run opens is therefore watched the
+    // same way, and each line says which tab it came from.
+    const watchOtherTab = (target) => {
+      const where = (request) => {
+        try {
+          return ` [in ${request.frame().url().slice(0, 90)}]`;
+        } catch {
+          return ' [in a tab that has gone away]';
+        }
+      };
+      target.on('response', (response) => {
+        const status = response.status();
+        const url = response.url();
+        if (status >= 400 && /\/api\//.test(url)) {
+          const line =
+            `HTTP ${status} ${response.request().method()} ` +
+            `${url.replace(/^https?:\/\/[^/]+/, '')}${where(response.request())}`;
+          if (!refused.includes(line)) {
+            refused.push(line);
+            log(line);
+          }
+        }
+      });
+      target.on('console', (message) => {
+        if (message.type() === 'error') {
+          consoleErrors.push(`console (other tab): ${message.text()}`);
+        }
+      });
+      target.on('pageerror', (error) => {
+        consoleErrors.push(`pageerror (other tab): ${error.message}`);
+      });
+    };
+    browser.on('targetcreated', async (created) => {
+      if (created.type() !== 'page') return;
+      const opened = await created.page().catch(() => null);
+      if (opened && opened !== page) watchOtherTab(opened);
+    });
+
     /** The most recent successful answer for a route matching [needle]. */
     const fileAnswerFor = (needle, since) =>
       fileAnswers

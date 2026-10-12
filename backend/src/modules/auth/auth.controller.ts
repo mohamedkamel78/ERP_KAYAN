@@ -4,6 +4,7 @@ import {
   AuthUser,
   CurrentUser,
 } from '../../common/decorators/current-user.decorator';
+import { OptionalAuth } from '../../common/decorators/optional-auth.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { AuthService } from './auth.service';
@@ -51,12 +52,23 @@ export class AuthController {
     });
   }
 
+  /**
+   * Ends a session.
+   *
+   * `@OptionalAuth()`: the client calls this after it has already thrown the
+   * access token away, so there is frequently nothing to present. A logout
+   * that is refused is a dead end for both sides - the person has gone, and
+   * the refresh token that is still in the database has simply never been
+   * asked about. When a principal does arrive, revocation works exactly as
+   * before.
+   */
   @Post('logout')
+  @OptionalAuth()
   async logout(
-    @CurrentUser() user: AuthUser,
+    @CurrentUser() user: AuthUser | undefined,
     @Headers('x-refresh-token') refreshToken?: string,
   ) {
-    await this.auth.logout(user.userId, refreshToken);
+    if (user?.userId) await this.auth.logout(user.userId, refreshToken);
     return { success: true };
   }
 

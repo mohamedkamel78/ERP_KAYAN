@@ -59,12 +59,28 @@ class AuthRepositoryImpl implements AuthRepository {
           ? json['user'] as Map<String, dynamic>
           : json;
       return Success(UserDto(userJson).toDomain());
-    } on Failure catch (failure) {
-      // An invalid/expired token must not lock the app in a broken state.
+    } on AuthFailure catch (failure) {
+      // The server itself said this token is no good - expired, revoked,
+      // signed in elsewhere. Keeping it would only make every screen ask the
+      // same question again, so it goes.
       await _tokenStore.clear();
       return ResultFailure(failure);
+    } on Failure catch (failure) {
+      // Everything else - a timeout, a refused connection, a 500, a route
+      // that is simply slow after the server restarted - says nothing about
+      // the token. Clearing it here is how a bad moment becomes a lost
+      // session: this store is shared with every other tab of the app, so one
+      // tab that could not reach the server used to sign the person out of all
+      // of them, and the screen they opened next answered "Invalid or expired
+      // token". Keep the credential, report the failure, let the next attempt
+      // work.
+      _log.warning(
+        'Could not reach the server to restore the session '
+        '(${failure.runtimeType}); the saved token is kept',
+      );
+      return ResultFailure(failure);
     } catch (e) {
-      await _tokenStore.clear();
+      _log.warning('Session restore failed for an unexpected reason ($e)');
       return ResultFailure(ServerFailure('Could not restore session', e));
     }
   }

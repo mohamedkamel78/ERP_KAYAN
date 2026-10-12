@@ -11,6 +11,7 @@ import { accessSecret } from '../config/jwt-secrets';
 import { ALLOW_QUERY_TOKEN_KEY } from '../decorators/allow-query-token.decorator';
 import { DOWNLOAD_TICKET_TYPE } from '../download-ticket';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { OPTIONAL_AUTH_KEY } from '../decorators/optional-auth.decorator';
 import { AuthUser } from '../decorators/current-user.decorator';
 
 @Injectable()
@@ -61,7 +62,16 @@ export class JwtAuthGuard implements CanActivate {
       }
     }
 
+    // Some routes are about the credential rather than protected by it -
+    // `POST /auth/logout` above all. See @OptionalAuth() for why refusing
+    // those is worse than it looks.
+    const optionalAuth = this.reflector.getAllAndOverride<boolean>(
+      OPTIONAL_AUTH_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
     if (!token) {
+      if (optionalAuth) return true;
       throw new UnauthorizedException('Missing bearer token');
     }
 
@@ -106,11 +116,11 @@ export class JwtAuthGuard implements CanActivate {
       };
       return true;
     } catch (error) {
-      if (error instanceof UnauthorizedException) throw error;
-      // A copy that was never given a signing key cannot check anything, and
-      // saying so is the difference between a machine problem someone can
-      // fix and an "Invalid or expired token" that sends them in circles.
       if (error instanceof ServiceUnavailableException) throw error;
+      // On a route that asked for the principal only if there is one, a token
+      // that no longer verifies is the expected case, not a failure.
+      if (optionalAuth) return true;
+      if (error instanceof UnauthorizedException) throw error;
       // Never echo the underlying JWT error: it leaks library internals.
       throw new UnauthorizedException('Invalid or expired token');
     }

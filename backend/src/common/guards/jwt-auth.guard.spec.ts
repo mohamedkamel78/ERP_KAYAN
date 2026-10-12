@@ -2,6 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 
 import { AllowQueryToken } from '../decorators/allow-query-token.decorator';
+import { OptionalAuth } from '../decorators/optional-auth.decorator';
 import { DOWNLOAD_TICKET_TYPE } from '../download-ticket';
 import { JwtAuthGuard } from './jwt-auth.guard';
 
@@ -47,6 +48,7 @@ describe('JwtAuthGuard', () => {
     headers?: Record<string, string>;
     query?: Record<string, unknown>;
     allowQueryToken?: boolean;
+    optionalAuth?: boolean;
   }) {
     const request: Record<string, unknown> = {
       headers: options.headers ?? {},
@@ -58,7 +60,12 @@ describe('JwtAuthGuard', () => {
         switchToHttp: () => ({
           getRequest: () => request,
         }),
-        getHandler: () => (options.allowQueryToken ? decorated : plain),
+        getHandler: () =>
+          options.allowQueryToken
+            ? decorated
+            : options.optionalAuth
+              ? optional
+              : plain,
         getClass: () => class Target {},
       } as unknown as import('@nestjs/common').ExecutionContext,
     };
@@ -67,7 +74,9 @@ describe('JwtAuthGuard', () => {
   class Target {}
   function plain() {}
   function decorated() {}
+  function optional() {}
   AllowQueryToken()(decorated);
+  OptionalAuth()(optional);
 
   function guard() {
     return new JwtAuthGuard(
@@ -87,7 +96,34 @@ describe('JwtAuthGuard', () => {
     });
   });
 
-  it('refuses a request with no credentials at all', async () => {
+  // A route that asks for the principal only if there is one - `POST
+  // /auth/logout` above all. A client signs out right after throwing a spent
+  // token away, so the request it makes has nothing to present, and a refusal
+  // there is what made a client sign out of itself over and over.
+  it('lets an optional route through when there is no credential at all', async () => {
+    const { request, execution } = context({ optionalAuth: true });
+    expect(await guard().canActivate(execution)).toBe(true);
+    expect((request as { user?: unknown }).user).toBeUndefined();
+  });
+
+  it('lets an optional route through with a token that no longer verifies', async () => {
+    const { execution } = context({
+      optionalAuth: true,
+      headers: { authorization: 'Bearer signed-with-another-key' },
+    });
+    expect(await guard().canActivate(execution)).toBe(true);
+  });
+
+  it('still reads the principal on an optional route that presents one', async () => {
+    const { request, execution } = context({
+      optionalAuth: true,
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    expect(await guard().canActivate(execution)).toBe(true);
+    expect((request as { user?: { userId?: string } }).user?.userId).toBe('u1');
+  });
+
+  it('keeps refusing every other route with no credentials', async () => {
     await expect(guard().canActivate(context({}).execution)).rejects.toThrow(
       UnauthorizedException,
     );
