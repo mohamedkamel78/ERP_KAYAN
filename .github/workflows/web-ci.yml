@@ -218,7 +218,21 @@ jobs:
           OUT_DIR: ${{ github.workspace }}/e2e-out
         run: |
           npm install --no-save --prefix tools/browser puppeteer-core
-          node tools/browser/app_actions_check.mjs
+          set +e
+          node tools/browser/app_actions_check.mjs > /tmp/browser.txt 2>&1
+          status=$?
+          cat /tmp/browser.txt
+          set -e
+          # The tool writes what it saw into OUT_DIR either way; keep the
+          # transcript with it, so the artifact explains itself.
+          cp /tmp/browser.txt "${{ github.workspace }}/e2e-out/browser-check.log" 2>/dev/null || true
+          if [ "$status" -ne 0 ]; then
+            grep -E "^FAIL|checks passed|the browser check itself broke" /tmp/browser.txt \
+              | head -20 | while IFS= read -r line; do
+                echo "::error::$line"
+              done
+            exit "$status"
+          fi
 
       - name: Keep what the browser saw
         if: always()
@@ -226,4 +240,16 @@ jobs:
         with:
           name: browser-checks
           path: e2e-out
-          if-no-files-found: ignore
+          if-no-files-found: warn
+
+      - name: Say what the browser saw
+        if: always()
+        run: |
+          if [ -f "${{ github.workspace }}/e2e-out/summary.txt" ]; then
+            {
+              echo '### Browser checks'
+              echo '```'
+              cat "${{ github.workspace }}/e2e-out/summary.txt"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
