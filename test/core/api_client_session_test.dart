@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:erp_kayan/core/config/app_config.dart';
 import 'package:erp_kayan/core/network/api_client.dart';
@@ -56,23 +59,28 @@ class _ScriptedAdapter implements HttpClientAdapter {
   final int Function(String path) reply;
   final List<String> asked = <String>[];
 
+  // Dio 5.9 hands an adapter the raw body to produce, not a finished
+  // Response: the status, the headers and the text are all this fake decides.
   @override
-  Future<Response<dynamic>> fetch(
+  Future<ResponseBody> fetch(
     RequestOptions options,
-    CancelToken? cancelToken,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
   ) async {
     asked.add(options.path);
     final status = reply(options.path);
-    return Response<dynamic>(
-      statusCode: status,
-      // A success carries a token pair along with it, so the one endpoint
-      // that is answered with a renewal has something to renew with.
-      data: <String, dynamic>{
+    return ResponseBody.fromString(
+      // A success carries a token pair along with it, so the one endpoint that
+      // is answered with a renewal has something to renew with.
+      jsonEncode(<String, dynamic>{
         'ok': status == 200,
         'accessToken': 'fresh',
         'refreshToken': 'fresh-once',
+      }),
+      status,
+      headers: <String, List<String>>{
+        Headers.contentTypeHeader: <String>[Headers.jsonContentType],
       },
-      requestOptions: options,
     );
   }
 
