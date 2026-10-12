@@ -93,6 +93,61 @@ function save() {
   } catch {
     /* the report is a courtesy; never let it mask the real failure */
   }
+  writeJobSummary();
+}
+
+/**
+ * The same verdict, written where GitHub shows it without a download.
+ *
+ * A failing run keeps what it saw in an artifact, and an artifact is only
+ * read by someone who already knows they need it. The job summary of a pull
+ * request is read by everyone: it sits on the run page. So the verdict, the
+ * lines that failed and the last words the page said about itself are written
+ * there as well, between a marker so a rerun replaces the block instead of
+ * stacking another copy under it.
+ */
+const SUMMARY_MARKER = '<!-- kayan-browser-checks -->';
+
+function writeJobSummary() {
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (!file) return;
+  try {
+    const passed = results.filter((r) => r.ok).length;
+    const failures = results.filter((r) => !r.ok);
+    const seen = consoleLines
+      .filter((line) => /^(NAV|LABELS missed|CLICK|LOGIN|INPUTS typed|SERVER|pageerror|console)/.test(line))
+      .slice(-18);
+    const block = [
+      SUMMARY_MARKER,
+      '### Browser checks',
+      '',
+      `**${passed}/${results.length} checks passed**`,
+      '',
+      ...results.map(
+        (result) =>
+          `- ${result.ok ? 'pass' : '**FAIL**'}  ${result.name}` +
+          (result.detail ? ` — ${result.detail}` : ''),
+      ),
+      failures.length ? '' : null,
+      failures.length ? '<details><summary>what the page said while it ran</summary>' : null,
+      failures.length ? '' : null,
+      failures.length ? '```' : null,
+      ...seen.map((line) => line.replace(/\|/g, '¦').slice(0, 240)),
+      failures.length ? '```' : null,
+      failures.length ? '</details>' : null,
+    ].filter((line) => line !== null);
+
+    // Everything before the marker belongs to somebody else's step and stays.
+    let before = '';
+    if (existsSync(file)) {
+      const whole = readFileSync(file, 'utf8');
+      const at = whole.indexOf(SUMMARY_MARKER);
+      before = at === -1 ? whole : whole.slice(0, at);
+    }
+    writeFileSync(file, `${before}${block.join('\n')}\n`);
+  } catch {
+    /* the summary is a courtesy too; a broken one must not fail the check */
+  }
 }
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -317,6 +372,33 @@ async function main() {
     }
 
     /**
+     * One line saying where the browser actually is, after a step that was
+     * supposed to move it.
+     *
+     * `FAIL  the reports entry opens - at http://...#/dashboard` tells a
+     * reader nothing about the page; this says which controls were up at the
+     * moment the click was expected to have landed, which is what a wording
+     * change or a refused permission looks like from the outside.
+     */
+    async function navNote(step, stillOnLogin) {
+      try {
+        const labels = await publishedLabels();
+        const names = labels
+          .map((node) => (node.label || node.text).trim())
+          .filter(Boolean)
+          .slice(0, 16);
+        const url = page.url();
+        log(
+          `NAV ${step}: url=${url}` +
+            (stillOnLogin ? ` still-on-login=${stillOnLogin()}` : '') +
+            ` controls=[${names.join(' | ')}]`,
+        );
+      } catch (error) {
+        log(`NAV ${step}: could not be read - ${error.message}`);
+      }
+    }
+
+    /**
      * The centre of the smallest Flutter semantic node whose name includes
      * one of [names].
      *
@@ -402,10 +484,17 @@ async function main() {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         const fresh = downloads.slice(previousCount);
-        if (fresh.length && fresh.every((item) => item.done)) return fresh;
+        if (fresh.length && fresh.every((item) => item.done)) break;
         await wait(250);
       }
-      return downloads.slice(previousCount);
+      const fresh = downloads.slice(previousCount);
+      // Say what arrived, and whether it arrived whole: a download that was
+      // still open when the timer ran out is a different thing from one that
+      // never started, and the log has to be able to tell them apart.
+      log(
+        `DOWNLOAD ${fresh.length === 0 ? 'nothing arrived' : fresh.map((item) => `${item.suggested}${item.done ? '' : ' (incomplete)'}`).join(', ')}`,
+      );
+      return fresh.filter((item) => item.done);
     }
 
     const bytesOf = (entry) => {
@@ -517,36 +606,63 @@ async function main() {
 
     const beforeLoginResponse = responses.length;
     await clickNamed(['تسجيل الدخول', 'Sign in'], { step: 'signin-button' });
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (!/login|signin|setup/.test(page.url())) break;
+
+    /**
+     * Whether the browser is still looking at the sign-in page.
+     *
+     * The address is the first thing to ask, because the router is what moves
+     * it: `#/login` while signed out, `#/dashboard` once the session exists.
+     * It is not the only thing to ask though. A single-page app can be signed
+     * in and still be mid-paint, and a check that reads the address once per
+     * second for eight seconds has decided the program is broken before the
+     * program has finished. So the page is asked twice: by address, and by
+     * the controls it publishes - the workspace has a reports button and the
+     * login page does not, which is the surer sign of the two.
+     */
+    const atLoginPage = () => /login|signin|setup/.test(page.url());
+    const workspaceIsUp = async () =>
+      (await findAllNodes(['التقارير', 'Reports', 'القيود', 'Journal'], []).catch(
+        () => [],
+      ))
+        .then((nodes) => nodes.length > 0);
+
+    let signedIn = false;
+    for (let attempt = 0; attempt < 12 && !signedIn; attempt += 1) {
       await wait(1000);
+      signedIn = !atLoginPage() || (await workspaceIsUp());
     }
-    if (/login|signin|setup/.test(page.url())) {
+
+    if (!signedIn) {
       // A form that is filled in usually submits on Enter too. Trying it is
       // cheaper than a run that reports a sign-in it never attempted.
       log('LOGIN the button did not move the page; trying Enter');
       await page.keyboard.press('Enter');
-      for (let attempt = 0; attempt < 12; attempt += 1) {
-        if (!/login|signin|setup/.test(page.url())) break;
+      for (let attempt = 0; attempt < 12 && !signedIn; attempt += 1) {
         await wait(1000);
+        signedIn = !atLoginPage() || (await workspaceIsUp());
       }
     }
+
     const loginResponse = responses
       .slice(beforeLoginResponse)
       .find((entry) => /\/auth\/login/.test(entry.url));
     if (loginResponse) {
       log(`LOGIN sign-in answered ${loginResponse.status}`);
     }
-    await wait(9000);
+    // The workspace loads its first numbers after the session exists, and the
+    // screens the checks click are behind that. Give it a moment to settle,
+    // then write down where the browser ended up.
+    await wait(4000);
     await shot('03-after-signin');
     const at = page.url();
+    await navNote('after-signin', atLoginPage);
     check(
       'sign in opens the workspace',
-      typed && !/login|signin|setup/.test(at),
+      typed && signedIn,
       `now at ${at}` +
-        (loginResponse ? `, sign-in answered ${loginResponse.status}` : ''),
+        (loginResponse ? `, sign-in answered ${loginResponse.status}` : ', no answer seen'),
     );
-    if (/login|signin|setup/.test(at)) {
+    if (!signedIn) {
       await describe('after-signin');
       return 1;
     }
@@ -556,6 +672,7 @@ async function main() {
     const wentToReports = await clickNamed(['التقارير', 'Reports'], { step: 'nav-reports' });
     await wait(5000);
     await shot('04-reports');
+    await navNote('nav-reports');
     check('the reports entry opens', wentToReports, `at ${page.url()}`);
 
     // A period has to be chosen before a report has anything to show.
@@ -606,6 +723,7 @@ async function main() {
     const wentToImport = await clickNamed(['رفع بيانات', 'Import'], { step: 'nav-import' });
     await wait(5000);
     await shot('06-import');
+    await navNote('nav-import');
     check('the import entry opens', wentToImport, `at ${page.url()}`);
 
     const clickedTemplate = await clickNamed(['تنزيل القالب', 'القالب', 'template', 'Template'], {
@@ -674,6 +792,7 @@ async function main() {
     const wentToBackup = await clickNamed(['النسخ الاحتياطي', 'Backup'], { step: 'nav-backup' });
     await wait(5000);
     await shot('08-backup');
+    await navNote('nav-backup');
     check('the backup entry opens', wentToBackup, `at ${page.url()}`);
 
     const clickedCreate = await clickNamed(['إنشاء نسخة', 'Create full backup'], {
