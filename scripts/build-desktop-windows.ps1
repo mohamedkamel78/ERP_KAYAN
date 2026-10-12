@@ -240,7 +240,7 @@ $portablePg = Join-Path $toolsFolder "pgsql\bin"
 # %LOCALAPPDATA%\\kayan-tools\\pgsql is unsafe: an older developer helper or
 # an unrelated PostgreSQL build can leave binaries compiled against an absolute
 # build-machine timezone path. That makes the installed database fail at startup.
-$pgVersion = "17.7"
+$pgVersion = "16.15"
 $zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
 $zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
 Write-Host "      preparing the official EDB PostgreSQL $pgVersion distribution"
