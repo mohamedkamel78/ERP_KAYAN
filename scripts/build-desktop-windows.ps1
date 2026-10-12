@@ -263,13 +263,22 @@ New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
 if ($LASTEXITCODE -ne 0) {
   Fail "The official PostgreSQL installer could not extract its runtime binaries."
 }
-$pgBin = Join-Path $extractRoot "bin"
-if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
-  $pgBin = Join-Path $extractRoot "pgsql\bin"
+$initDbCandidate = Get-ChildItem -Path $extractRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $initDbCandidate) {
+  # Some EDB installer revisions place the extracted server one level deeper
+  # than --prefix; discover the real bin directory instead of assuming layout.
+  $defaultPgRoot = Join-Path $env:ProgramFiles "PostgreSQL\16"
+  if (Test-Path $defaultPgRoot) {
+    $initDbCandidate = Get-ChildItem -Path $defaultPgRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  }
 }
-if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
-  Fail "The PostgreSQL installer extracted, but initdb.exe was not found."
+if (-not $initDbCandidate) {
+  $layout = if (Test-Path $extractRoot) {
+    (Get-ChildItem -Path $extractRoot -Force -Recurse -ErrorAction SilentlyContinue | Select-Object -First 40 -ExpandProperty FullName) -join [Environment]::NewLine
+  } else { "(extract directory was not created)" }
+  Fail ("The PostgreSQL installer returned success, but initdb.exe was not found. Extracted files:" + [Environment]::NewLine + $layout)
 }
+$pgBin = $initDbCandidate.Directory.FullName
 Write-Host "      official EDB PostgreSQL server binaries extracted"
 $pgFolder = Join-Path $backendFolder "pg"
 $pgRoot = Split-Path -Parent $pgBin
