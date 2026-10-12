@@ -426,6 +426,11 @@ jobs:
             cat /tmp/apicheck.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # The number, published even when the answer is "all of them": a
+          # report that says sixty checks passed should be readable as sixty.
+          grep -E "checks passed" /tmp/apicheck.txt | tail -1 | sed -e 's/%/%25/g' -e 's/#/%23/g' | while IFS= read -r line; do
+            echo "::notice::api check: $line"
+          done
           if [ "$status" -ne 0 ]; then
             failed=$(grep -E "^(FAIL|the check itself broke)" /tmp/apicheck.txt | tail -15 | sed -e 's/%/%25/g' -e 's/#/%23/g' -e 's/\r//g' | awk 'BEGIN{ORS="%0A"} {print}' | sed -e 's/%0A$//')
             echo "::error::api check: ${failed}"

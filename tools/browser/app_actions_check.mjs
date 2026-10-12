@@ -888,7 +888,12 @@ async function main() {
           clickNamed(['ملف', 'file', 'File'], { timeoutMs: 10000, step: 'choose-file' }),
         ]);
         await chooser.dismiss();
-        await wait(1500);
+        // Long enough for the bar at the bottom of the screen to go away. A
+        // file that was just read leaves a sentence on the screen, and that
+        // sentence sits over the button: clicking a moment later presses the
+        // message, not the control, and the check would then report a wedged
+        // button where there is only a snackbar in the way.
+        await wait(6000);
       }
       cancelRecovered = true;
     } catch {
