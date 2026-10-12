@@ -1,6 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/network/api_client.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/reset_data_source.dart';
 
