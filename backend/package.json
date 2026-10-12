@@ -14,7 +14,8 @@
     "db:prepare": "node scripts/prepare-database.mjs",
     "seed": "ts-node prisma/seed.ts",
     "test": "jest",
-    "lint": "eslint \"src/**/*.ts\""
+    "lint": "eslint \"src/**/*.ts\"",
+    "check:api": "node scripts/api-check.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",

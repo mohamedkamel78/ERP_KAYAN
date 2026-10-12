@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../../core/platform/browser_actions.dart';
 import '../../../../core/platform/picked_file.dart';
 import '../../../../shared/extensions/l10n_extension.dart';
+import '../../../../shared/widgets/download_feedback.dart';
 import '../../../common/presentation/screens/module_scaffold.dart';
 import '../providers/data_providers.dart';
 import '../widgets/full_backup_section.dart';
@@ -72,13 +72,20 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     );
   }
 
-  Future<void> _download() async {
-    final url = await ref.read(reportLinkProvider).backup();
-    openInNewTab(url);
-  }
+  Future<void> _download() => runDownload(
+    context,
+    ref.read(reportLinkProvider).backup(),
+  );
 
   Future<void> _choose() async {
-    final picked = await pickFile(extensions: ['.json']);
+    PickedFile? picked;
+    try {
+      picked = await pickFile(extensions: ['.json']);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _failure = describeApiError(error));
+      return;
+    }
     if (picked == null) return;
     setState(() {
       _file = picked;

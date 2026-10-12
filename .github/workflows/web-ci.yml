@@ -65,10 +65,158 @@ jobs:
         run: flutter pub get
 
       - name: Analyze Flutter code
-        run: flutter analyze
+        run: |
+          set +e
+          flutter analyze > /tmp/analyze.txt 2>&1
+          status=$?
+          set -e
+          cat /tmp/analyze.txt
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### flutter analyze'
+              echo '```'
+              cat /tmp/analyze.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            for severity in error warning info; do
+              grep -E "^ *${severity} •" /tmp/analyze.txt | head -10 | while IFS= read -r line; do
+                echo "::${severity}::${line}"
+              done
+            done
+          fi
+          exit "$status"
 
       - name: Run Flutter tests
-        run: flutter test
+        run: |
+          set +e
+          flutter test > /tmp/test.txt 2>&1
+          status=$?
+          set -e
+          tail -n 60 /tmp/test.txt
+          if [ "$status" -ne 0 ]; then
+            {
+              echo '### flutter test'
+              echo '```'
+              tail -n 120 /tmp/test.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -nE "\[E\]|Expected:|Actual:|Exception|The following|failed" /tmp/test.txt | head -10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+          fi
+          exit "$status"
 
       - name: Build Flutter Web (Release)
         run: flutter build web --release
+
+      - name: Keep the web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAYAN-ERP-web
+          path: build/web
+          retention-days: 14
+
+  browser-checks:
+    # The program's file promises, checked the way a person meets them: in a
+    # real browser against the real server - download an export, open the
+    # print page, choose and cancel a file, take a full backup and download
+    # it. What is asserted comes from browser events (downloads, tabs,
+    # network), not from pixels.
+    name: Browser checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [backend-test-and-build, flutter-web-build]
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Take the source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: PostgreSQL tools (the backup buttons call them)
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Build the server
+        working-directory: backend
+        run: |
+          npx prisma generate
+          npm run build
+
+      - name: Prepare the database
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          set +e
+          node scripts/prepare-database.mjs > /tmp/dbprep.txt 2>&1
+          s1=$?
+          cat /tmp/dbprep.txt
+          npm run seed > /tmp/seed.txt 2>&1
+          s2=$?
+          cat /tmp/seed.txt
+          set -e
+          if [ "$s1" -ne 0 ] || [ "$s2" -ne 0 ]; then
+            cat /tmp/dbprep.txt /tmp/seed.txt | tail -10 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit 1
+          fi
+
+      - name: Take the web build
+        uses: actions/download-artifact@v4
+        with:
+          name: KAYAN-ERP-web
+          path: web
+
+      - name: Start the server with the web client
+        env:
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
+          KAYAN_WEB_ROOT: ${{ github.workspace }}/web
+          KAYAN_BACKUP_DIR: /tmp/kayan-backups
+        run: |
+          cd backend
+          nohup node dist/src/main.js > /tmp/kayan-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/ >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -sf http://127.0.0.1:3000/ >/dev/null
+
+      - name: Browser checks against the real app
+        env:
+          APP_URL: http://127.0.0.1:3000
+          OUT_DIR: ${{ github.workspace }}/e2e-out
+        run: |
+          npm install --no-save --prefix tools/browser puppeteer-core
+          node tools/browser/app_actions_check.mjs
+
+      - name: Keep what the browser saw
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-checks
+          path: e2e-out
+          if-no-files-found: ignore

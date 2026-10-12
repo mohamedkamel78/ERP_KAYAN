@@ -7,6 +7,10 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { AuditService } from '../../common/audit/audit.service';
+import {
+  DOWNLOAD_TICKET_TYPE,
+  downloadTicketTtl,
+} from '../../common/download-ticket';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 const MAX_FAILED_ATTEMPTS = 5;
@@ -21,6 +25,11 @@ export interface SessionUser {
   roles: string[];
   permissions: string[];
   isActive: boolean;
+  /// Whether this account bypasses the permission check outright. The client
+  /// is told because it has to decide what to offer: a screen that hides an
+  /// action the server would have allowed is as wrong as one that offers
+  /// something the server will refuse.
+  isSuperAdmin: boolean;
 }
 
 @Injectable()
@@ -150,6 +159,37 @@ export class AuthService {
     };
   }
 
+  /**
+   * A one-minute credential for one address: a print page or a file.
+   *
+   * The sign-in token is what pays for it, and it is the sign-in token that
+   * keeps working everywhere afterwards. What comes back here is deliberately
+   * weaker — see DOWNLOAD_TICKET_TYPE for what it can and cannot do.
+   */
+  async issueDownloadTicket(user: {
+    id: string;
+    username: string;
+    companyId: string;
+    branchId: string | null;
+    isSuperAdmin: boolean;
+    permissions: string[];
+  }): Promise<{ ticket: string; expiresIn: number }> {
+    const expiresIn = downloadTicketTtl();
+    const ticket = await this.jwt.signAsync(
+      {
+        typ: DOWNLOAD_TICKET_TYPE,
+        sub: user.id,
+        username: user.username,
+        companyId: user.companyId,
+        branchId: user.branchId,
+        isSuperAdmin: user.isSuperAdmin,
+        permissions: user.permissions,
+      },
+      { secret: process.env.JWT_ACCESS_SECRET, expiresIn },
+    );
+    return { ticket, expiresIn };
+  }
+
   async refresh(token: string) {
     const hash = this.hashToken(token);
     const stored = await this.prisma.refreshToken.findUnique({
@@ -259,6 +299,7 @@ export class AuthService {
       fullNameAr: string;
       companyId: string;
       isActive: boolean;
+      isSuperAdmin: boolean;
     },
     roles: string[],
     permissions: string[],
@@ -272,6 +313,7 @@ export class AuthService {
       branchId,
       roles,
       permissions,
+      isSuperAdmin: user.isSuperAdmin,
       isActive: user.isActive,
     };
   }

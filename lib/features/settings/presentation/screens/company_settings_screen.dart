@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/platform/browser_actions.dart';
+import '../../../../core/platform/picked_file.dart';
 import '../../../../shared/extensions/l10n_extension.dart';
 import '../../../../shared/widgets/state_views.dart';
 import '../providers/company_providers.dart';
@@ -200,9 +201,17 @@ class _LogoRowState extends ConsumerState<_LogoRow> {
 
   Future<void> _upload() async {
     final l10n = context.l10n;
-    final picked = await pickFile(
-      extensions: ['.png', '.jpg', '.jpeg', '.webp'],
-    );
+    PickedFile? picked;
+    try {
+      picked = await pickFile(
+        extensions: ['.png', '.jpg', '.jpeg', '.webp'],
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$error')));
+      return;
+    }
     if (picked == null || !mounted) return;
     setState(() => _busy = true);
     String message;

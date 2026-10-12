@@ -221,36 +221,87 @@ Step "5/8" "Bundling the PostgreSQL backup tools (pg_dump / pg_restore)"
 # supports. The copy is made from, in order of preference:
 #   1. the portable PostgreSQL that scripts\install-postgres-portable.bat
 #      provisions (the same one the program's own database runs on);
-#   2. a PostgreSQL installed on this build machine, newest first.
+#   2. a PostgreSQL installed on this build machine, newest first;
+#   3. failing both, this script provisions the same portable toolchain the
+#      installer script uses - the same download, the same folder - so a
+#      fresh build machine (including CI) can always produce a package.
 # Only the two programs and the DLLs they need are copied. Nothing is
-# installed, nothing existing is replaced, and no PostgreSQL setting is read
-# or changed. PostgreSQL's licence allows distributing these binaries with
-# an application.
+# installed as a Windows service, nothing existing is replaced, and no
+# PostgreSQL setting is read or changed. PostgreSQL's licence allows
+# distributing these binaries with an application.
 $pgBin = $null
-$portablePg = Join-Path $env:LOCALAPPDATA "kayan-tools\pgsql\bin"
+$toolsFolder = Join-Path $env:LOCALAPPDATA "kayan-tools"
+$portablePg = Join-Path $toolsFolder "pgsql\bin"
 if (Test-Path (Join-Path $portablePg "pg_dump.exe")) {
   $pgBin = $portablePg
   Write-Host "      using the portable PostgreSQL toolchain at $portablePg"
 }
 if (-not $pgBin) {
   $candidates = @()
-  foreach ($root in @("${env:ProgramFiles}\PostgreSQL", "${env:ProgramFiles(x86)}\PostgreSQL")) {
-    if ($root -and (Test-Path $root)) {
-      foreach ($versionDir in (Get-ChildItem $root -Directory -ErrorAction SilentlyContinue)) {
+  # The folder name here must not be $root: that name holds the repository
+  # root for the rest of the script, and a clobbered $root sends every later
+  # path (the window icon, the program folder) looking in the wrong place.
+  foreach ($installRoot in @("${env:ProgramFiles}\PostgreSQL", "${env:ProgramFiles(x86)}\PostgreSQL")) {
+    if ($installRoot -and (Test-Path $installRoot)) {
+      foreach ($versionDir in (Get-ChildItem $installRoot -Directory -ErrorAction SilentlyContinue)) {
         $bin = Join-Path $versionDir.FullName "bin"
         if (Test-Path (Join-Path $bin "pg_dump.exe")) { $candidates += $bin }
       }
     }
   }
   # Newest version first: a newer pg_dump reads older servers, the reverse
-  # is not true.
-  $candidates = $candidates | Sort-Object -Descending
-  if ($candidates.Count -gt 0) { $pgBin = $candidates[0] }
+  # is not true. The @() wrapper is load-bearing: a one-element array that
+  # goes through the pipeline collapses to a bare string, and indexing a
+  # string yields its first character - "C:\..." became "C" and the copy
+  # step then looked for a folder named C. Keep the array shape.
+  $candidates = @($candidates | Sort-Object -Descending)
+  if ($candidates.Count -gt 0) {
+    $pgBin = $candidates[0]
+    Write-Host "      using the installed PostgreSQL toolchain at $pgBin"
+  }
 }
 if (-not $pgBin) {
-  Fail ("No pg_dump/pg_restore found to bundle. Run scripts\install-postgres-portable.bat " +
-        "once (it downloads the portable PostgreSQL this project uses), or install " +
-        "PostgreSQL on this machine, then run this script again.")
+  # Nothing usable on this machine: provision the portable toolchain, exactly
+  # where install-postgres-portable.bat puts it (the tools only - no database
+  # folder, no service, no PATH change, no confirmation prompts).
+  $pgVersion = "17.7"
+  $zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
+  $zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
+  Write-Host "      no PostgreSQL tools on this machine - provisioning the portable"
+  Write-Host "      toolchain (PostgreSQL $pgVersion, about 330 MB) into $toolsFolder"
+  New-Item -ItemType Directory -Force -Path $toolsFolder | Out-Null
+  $haveZip = $false
+  if (Test-Path $zipFile) {
+    $haveZip = (Get-Item $zipFile).Length -gt 300000000
+    if (-not $haveZip) { Remove-Item -Force $zipFile }
+  }
+  if (-not $haveZip) {
+    # curl.exe ships with Windows and speaks TLS 1.2 out of the box; the
+    # PowerShell 5.1 downloader on a fresh runner can be negotiated down to
+    # TLS 1.0 and fail against the CDN.
+    & curl.exe -fsSL --retry 3 --retry-delay 2 -o $zipFile $zipUrl
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipFile)) {
+      Fail ("Could not download PostgreSQL tools from $zipUrl . Download the " +
+            "file in a browser, save it as $zipFile, and run this script again " +
+            "(or run scripts\install-postgres-portable.bat once).")
+    }
+  }
+  if ((Get-Item $zipFile).Length -le 300000000) {
+    Fail "The downloaded PostgreSQL archive looks truncated ($($zipFile)). Delete it and run this script again."
+  }
+  # The archive unpacks into a top-level folder named pgsql - the same
+  # layout install-postgres-portable.bat produces. tar.exe handles the zip
+  # without loading it into memory first.
+  & tar.exe -xf $zipFile -C $toolsFolder
+  if ($LASTEXITCODE -ne 0) {
+    Fail "The PostgreSQL archive at $zipFile could not be unpacked. Delete it and run this script again."
+  }
+  if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
+    Fail ("The PostgreSQL archive did not unpack to $portablePg . Run " +
+          "scripts\install-postgres-portable.bat once, then run this script again.")
+  }
+  $pgBin = $portablePg
+  Write-Host "      portable PostgreSQL tools are ready at $portablePg"
 }
 $pgFolder = Join-Path $backendFolder "pg"
 New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null

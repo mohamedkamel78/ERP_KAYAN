@@ -150,7 +150,14 @@ class _CompanySetupFormState extends State<CompanySetupForm> {
   }
 
   Future<void> _pickLogo() async {
-    final picked = await pickFile(extensions: ['.png', '.jpg', '.jpeg', '.webp']);
+    PickedFile? picked;
+    try {
+      picked = await pickFile(extensions: ['.png', '.jpg', '.jpeg', '.webp']);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _localError = '$error');
+      return;
+    }
     if (picked == null || !mounted) return;
     if (picked.sizeInBytes > 2 * 1024 * 1024) {
       setState(() => _localError = 'الشعار أكبر من ٢ ميجابايت / The logo is larger than 2 MB');
