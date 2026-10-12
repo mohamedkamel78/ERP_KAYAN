@@ -408,9 +408,19 @@ async function main() {
      * middle of the whole screen. Taking the smallest clicks the control the
      * words belong to.
      */
+    /**
+     * The first node that carries one of [names], trying the names in the
+     * order the caller gave them. The order is the caller's own preference:
+     * the full wording of a button comes before a shorter word that a
+     * heading also happens to contain. Within one name, controls are
+     * preferred and then the smallest match is taken.
+     */
     async function findNode(names, roles) {
-      const found = await findAllNodes(names, roles);
-      return found.length > 0 ? found[0] : null;
+      for (const name of names) {
+        const found = await findAllNodes([name], roles);
+        if (found.length > 0) return found[0];
+      }
+      return null;
     }
 
     /** Every matching node, smallest first. */
@@ -759,7 +769,8 @@ async function main() {
         ]);
         log(`FILE-CANCEL attempt ${attempt + 1}: button found=${clicked}, dialogue=${chooser ? 'opened' : 'not opened'}`);
         if (!chooser) throw new Error('no dialogue');
-        await chooser.dismiss();
+        // Puppeteer's file chooser closes the dialogue with cancel().
+        await chooser.cancel();
         await wait(1500);
       }
       cancelRecovered = true;
