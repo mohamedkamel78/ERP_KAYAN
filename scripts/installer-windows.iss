@@ -21,7 +21,7 @@
 #define AppShortName "ERP_KAYAN"
 #define AppExe "erp_kayan.exe"
 #define AppVersion "1.0.0"
-#define AppPublisher "KAYAN"
+#define AppPublisher "KAYAN Integrated Solutions"
 ; Both are passed in by scripts\build-desktop-windows.ps1, so a custom -Output
 ; folder stays in step. The values below are used when ISCC is run by hand.
 #ifndef SourceDir
