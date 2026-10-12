@@ -29,7 +29,7 @@ def main() -> int:
     verdict = [l for l in lines if re.match(r'^(FAIL|DIED) ', l)]
     summary = [l for l in lines if 'checks passed' in l or 'itself broke' in l]
     passed = [l[6:].split(' - ')[0][:90] for l in lines if l.startswith('PASS ')]
-    done = [l for l in lines if re.match(r'^(CLICK|TEMPLATE|FILE-CANCEL|LOGIN|INPUTS) ', l)]
+    done = [l for l in lines if re.match(r'^(CLICK|TEMPLATE|FILE-CANCEL|LOGIN|INPUTS|RELOAD|AFTER-RESTORE) ', l)]
     refused, seen = [], set()
     for line in lines:
         if line.startswith('HTTP ') and line not in seen:

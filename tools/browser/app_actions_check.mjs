@@ -940,6 +940,10 @@ async function main() {
     // The backup restored is the one this check just made, so what is
     // asserted is the round trip: the server reads it back and says so.
     const restoreMark = answers.length;
+    // A page that reloads, or a screen that is rebuilt, loses what it was
+    // showing. timeOrigin changes only when the page itself is loaded again,
+    // so comparing it before and after says which of the two happened.
+    const originBefore = await page.evaluate(() => performance.timeOrigin).catch(() => null);
     const openedRestore = await clickNamed(['استعادة قاعدة البيانات كاملة', 'Restore the whole database'], {
       timeoutMs: 15000,
       step: 'restore-open',
@@ -967,6 +971,13 @@ async function main() {
     }
     await wait(4000);
     await shot('07c-restore-done');
+    const originAfter = await page.evaluate(() => performance.timeOrigin).catch(() => null);
+    log(
+      `RELOAD the page was ${originBefore !== null && originAfter !== null && originBefore !== originAfter ? 'loaded again' : 'not loaded again'} during the restore; now at ${page.url()}`,
+    );
+    for (const entry of answers.slice(restoreMark).slice(0, 12)) {
+      log(`AFTER-RESTORE ${entry.method} ${entry.url.split('/api/v1')[1] ?? entry.url} ${entry.status}`);
+    }
     const restoreAnswered = Boolean(restoreAnswer && restoreAnswer.status >= 200 && restoreAnswer.status < 300);
     check(
       'a full restore from the screen is confirmed by the server',
