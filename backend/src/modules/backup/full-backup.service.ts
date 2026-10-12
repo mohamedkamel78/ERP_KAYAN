@@ -246,6 +246,7 @@ export class FullBackupService {
     dirs.push(join(process.cwd(), 'backend', 'pg'));
     // From dist/src/modules/backup (packaged) and src/modules/backup (source):
     // both resolve to the backend root, which is where pg\ lives.
+    dirs.push(join(__dirname, '..', '..', '..', '..', 'pg', 'bin'));
     dirs.push(join(__dirname, '..', '..', '..', '..', 'pg'));
     dirs.push(join(__dirname, '..', '..', '..', 'pg'));
     if (process.platform === 'win32') {

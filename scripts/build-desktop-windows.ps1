@@ -272,6 +272,7 @@ if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
 }
 Write-Host "      official EDB PostgreSQL server binaries extracted"
 $pgFolder = Join-Path $backendFolder "pg"
+$pgRoot = Split-Path -Parent $pgBin
 $pgBinFolder = Join-Path $pgFolder "bin"
 New-Item -ItemType Directory -Force -Path $pgBinFolder | Out-Null
 foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe")) {
