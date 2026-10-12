@@ -125,18 +125,18 @@ Check "Prisma's client was generated for this platform" (Has "backend\node_modul
 # Full database backups run pg_dump/pg_restore from the program's own folder,
 # so the package is not shippable without them - and a copy that cannot answer
 # --version from where it now sits is not a copy at all.
-$pgDump = Join-Path $folder "backend\pg\pg_dump.exe"
-$pgRestore = Join-Path $folder "backend\pg\pg_restore.exe"
-Check "the backup tool travels with it (backend\pg\pg_dump.exe)" (Test-Path $pgDump)
-Check "the restore tool travels with it (backend\pg\pg_restore.exe)" (Test-Path $pgRestore)
-Check "the PostgreSQL initializer ships with the installer" (Has "backend\pg\initdb.exe")
-Check "the PostgreSQL service controller ships with the installer" (Has "backend\pg\pg_ctl.exe")
-Check "the PostgreSQL client ships with the installer" (Has "backend\pg\psql.exe")
-Check "the PostgreSQL server binary ships with the installer" (Has "backend\pg\postgres.exe")
+$pgDump = Join-Path $folder "backend\pg\bin\pg_dump.exe"
+$pgRestore = Join-Path $folder "backend\pg\bin\pg_restore.exe"
+Check "the backup tool travels with it (backend\pg\bin\pg_dump.exe)" (Test-Path $pgDump)
+Check "the restore tool travels with it (backend\pg\bin\pg_restore.exe)" (Test-Path $pgRestore)
+Check "the PostgreSQL initializer ships with the installer" (Has "backend\pg\bin\initdb.exe")
+Check "the PostgreSQL service controller ships with the installer" (Has "backend\pg\bin\pg_ctl.exe")
+Check "the PostgreSQL client ships with the installer" (Has "backend\pg\bin\psql.exe")
+Check "the PostgreSQL server binary ships with the installer" (Has "backend\pg\bin\postgres.exe")
 Check "the PostgreSQL share data needed to initialize a cluster ships with it" (Has "backend\pg\share\postgres.bki")
-Check "libpq travels next to the tools (backend\pg\libpq.dll)" (Has "backend\pg\libpq.dll")
+Check "libpq travels next to the tools (backend\pg\libpq.dll)" (Has "backend\pg\bin\libpq.dll")
 foreach ($toolName in @("initdb.exe", "pg_ctl.exe", "psql.exe", "postgres.exe")) {
-  $toolPath = Join-Path $folder "backend\pg\$toolName"
+  $toolPath = Join-Path $folder "backend\pg\bin\$toolName"
   if (Test-Path $toolPath) {
     $toolVersion = & $toolPath --version 2>&1
     Check "$toolName runs from the packaged PostgreSQL folder" ($LASTEXITCODE -eq 0 -and "$toolVersion" -match [regex]::Escape($toolName.Replace(".exe", ""))) "$toolVersion"

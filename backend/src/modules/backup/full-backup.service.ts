@@ -240,7 +240,9 @@ export class FullBackupService {
   private bundledToolDirs(): string[] {
     const dirs: string[] = [];
     // backend\pg — next to the running server, however it was started.
+    dirs.push(join(process.cwd(), 'pg', 'bin'));
     dirs.push(join(process.cwd(), 'pg'));
+    dirs.push(join(process.cwd(), 'backend', 'pg', 'bin'));
     dirs.push(join(process.cwd(), 'backend', 'pg'));
     // From dist/src/modules/backup (packaged) and src/modules/backup (source):
     // both resolve to the backend root, which is where pg\ lives.

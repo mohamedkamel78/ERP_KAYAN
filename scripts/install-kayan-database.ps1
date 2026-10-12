@@ -9,7 +9,7 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $stdout = Join-Path $logDir "installer-db-setup.log"
 $stderr = Join-Path $logDir "installer-db-setup-error.log"
 $manager = Join-Path $AppDir "backend\scripts\manage-kayan-db.ps1"
-$pgDir = Join-Path $AppDir "backend\pg"
+$pgDir = Join-Path $AppDir "backend\pg\bin"
 if (-not (Test-Path $manager)) { throw ("The packaged PostgreSQL provisioner is missing: " + $manager) }
 if (-not (Test-Path (Join-Path $pgDir "initdb.exe"))) { throw ("The packaged PostgreSQL server binaries are missing: " + $pgDir) }
 $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"

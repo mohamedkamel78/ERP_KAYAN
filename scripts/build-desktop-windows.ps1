@@ -241,75 +241,75 @@ $portablePg = Join-Path $toolsFolder "pgsql\bin"
 # an unrelated PostgreSQL build can leave binaries compiled against an absolute
 # build-machine timezone path. That makes the installed database fail at startup.
 $pgVersion = "16.15"
-$zipUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
-$zipFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion.zip"
-Write-Host "      preparing the official EDB PostgreSQL $pgVersion distribution"
-New-Item -ItemType Directory -Force -Path $toolsFolder | Out-Null
-if ((Test-Path $zipFile) -and ((Get-Item $zipFile).Length -le 300000000)) {
-  Remove-Item -Force $zipFile
+$installerUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64.exe"
+$installerFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-installer.exe"
+$extractRoot = Join-Path $env:TEMP "kayan-postgresql-runtime-$pgVersion"
+Write-Host "      extracting the official EDB PostgreSQL $pgVersion installer to a temporary build folder"
+if ((Test-Path $installerFile) -and ((Get-Item $installerFile).Length -le 300000000)) {
+  Remove-Item -Force $installerFile
 }
-if (-not (Test-Path $zipFile)) {
-  & curl.exe -fsSL --retry 3 --retry-delay 2 -o $zipFile $zipUrl
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zipFile)) {
-    Fail ("Could not download the official EDB PostgreSQL archive from $zipUrl.")
+if (-not (Test-Path $installerFile)) {
+  & curl.exe -fsSL --retry 3 --retry-delay 2 -o $installerFile $installerUrl
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installerFile)) {
+    Fail ("Could not download the official EDB PostgreSQL installer from $installerUrl.")
   }
 }
-if ((Get-Item $zipFile).Length -le 300000000) {
-  Fail "The PostgreSQL archive is incomplete. Refusing to package it."
+if ((Get-Item $installerFile).Length -le 300000000) {
+  Fail "The PostgreSQL installer download is incomplete. Refusing to package it."
 }
-$stalePg = Join-Path $toolsFolder "pgsql"
-if (Test-Path $stalePg) { Remove-Item -Recurse -Force $stalePg }
-& tar.exe -xf $zipFile -C $toolsFolder
-if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
-$portablePg = Join-Path $toolsFolder "pgsql\bin"
-if (-not (Test-Path (Join-Path $portablePg "pg_dump.exe"))) {
-  Fail "The official EDB PostgreSQL archive did not unpack to $portablePg."
+if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+& $installerFile --mode unattended --unattendedmodeui none --prefix "$extractRoot" --extract-only 1
+if ($LASTEXITCODE -ne 0) {
+  Fail "The official PostgreSQL installer could not extract its runtime binaries."
 }
-$pgBin = $portablePg
-Write-Host "      official EDB PostgreSQL binaries extracted cleanly"
+$pgBin = Join-Path $extractRoot "bin"
+if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
+  $pgBin = Join-Path $extractRoot "pgsql\bin"
+}
+if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
+  Fail "The PostgreSQL installer extracted, but initdb.exe was not found."
+}
+Write-Host "      official EDB PostgreSQL server binaries extracted"
 $pgFolder = Join-Path $backendFolder "pg"
-New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
+$pgBinFolder = Join-Path $pgFolder "bin"
+New-Item -ItemType Directory -Force -Path $pgBinFolder | Out-Null
 foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe")) {
   $src = Join-Path $pgBin $tool
   if (Test-Path $src) {
-    Copy-Item $src $pgFolder -Force
+    Copy-Item $src $pgBinFolder -Force
   }
 }
-# The programs load libpq and its neighbours from their own folder.
-Get-ChildItem $pgBin -Filter "*.dll" | Copy-Item -Destination $pgFolder -Force
-
-# Copy PostgreSQL share directory if available (needed by initdb / postgres)
+# Keep PostgreSQL's expected bin/ and share/ sibling layout. Its relocatable
+# path logic uses the executable's location to find timezone and catalog data.
+Get-ChildItem $pgBin -Filter "*.dll" | Copy-Item -Destination $pgBinFolder -Force
 $pgRoot = Split-Path -Parent $pgBin
-$shareCandidates = @((Join-Path $pgRoot "share"), (Join-Path $pgBin "share"))
-foreach ($cand in $shareCandidates) {
-  if (Test-Path $cand) {
-    Copy-Item $cand (Join-Path $pgFolder "share") -Recurse -Force
-    Write-Host "      bundled PostgreSQL share directory from $cand"
-    break
-  }
+$shareSource = Join-Path $pgRoot "share"
+if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
+  $shareSource = Join-Path $pgBin "share"
 }
-
+if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
+  Fail "The PostgreSQL installer did not provide the required share/postgres.bki data."
+}
+Copy-Item $shareSource (Join-Path $pgFolder "share") -Recurse -Force
 Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
 
-# The copy is only real if it runs from where it now sits.
-# Validate that this exact bundled distribution can initialize a portable
-# cluster after relocation; this catches binaries compiled against a build
-# machine's absolute share/timezone directory before shipping the installer.
+# Probe the exact packaged bin/share layout before producing an installer.
 $probeData = Join-Path $env:TEMP ("kayan-pg-initdb-probe-" + [guid]::NewGuid().ToString("N"))
 $probeShare = Join-Path $pgFolder "share"
 try {
-  & (Join-Path $pgFolder "initdb.exe") -D $probeData -U postgres -A trust -E UTF8 --locale=C -L $probeShare
+  & (Join-Path $pgBinFolder "initdb.exe") -D $probeData -U postgres -A trust -E UTF8 --locale=C -L $probeShare
   if ($LASTEXITCODE -ne 0) {
-    Fail "The bundled PostgreSQL initdb could not initialize with the packaged share directory. Do not ship this package."
+    Fail "The bundled PostgreSQL initdb could not initialize with the packaged bin/share layout. Do not ship this package."
   }
 } finally {
   if (Test-Path $probeData) { Remove-Item $probeData -Recurse -Force -ErrorAction SilentlyContinue }
 }
 foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {
-  $probe = Join-Path $pgFolder $tool
+  $probe = Join-Path $pgBinFolder $tool
   $line = & $probe --version 2>&1
   if ($LASTEXITCODE -ne 0 -or -not ("$line" -match [regex]::Escape($tool.Replace(".exe", "")))) {
-    Fail "The bundled $tool did not answer --version from $pgFolder. The package is not shippable."
+    Fail "The bundled $tool did not answer --version from $pgBinFolder. The package is not shippable."
   }
   Write-Host "      bundled $($line | Select-Object -First 1)"
 }
