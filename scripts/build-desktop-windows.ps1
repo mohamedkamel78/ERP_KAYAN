@@ -403,19 +403,15 @@ no commands.
 
 What this copy needs on the machine
 -----------------------------------
-1. PostgreSQL, installed and running, holding the company's data.
-   The program connects to the address written in:
-       %APPDATA%\KAYAN-ERP\kayan.env
-   That file is created automatically the first time the program runs, with
-   fresh random signing keys. Edit it only if the database is somewhere else
-   or uses different credentials. Keep DATABASE_URL and ADMIN_DATABASE_URL on
-   the same PostgreSQL host and port (the Windows setup scripts use 127.0.0.1:5432).
-   The administrator URL is used to create/update the erp_app password before
-   migrations. If PostgreSQL reports Prisma P1000, correct both URLs and
-   restart the program. The settings file contains database credentials; keep
-   the Windows user account and that file protected.
+1. KAYAN Setup installs and starts its dedicated PostgreSQL service automatically.
+   Runtime settings are written to:
+       %ProgramData%\KAYAN-ERP\kayan.env
+   The file ACL is restricted to the installing Windows user, SYSTEM and local
+   Administrators. Logs and company JSON backups remain under:
+       %APPDATA%\KAYAN-ERP\
+   The database service and company data are preserved when the app is uninstalled.
 
-2. That is all. Node.js, Flutter and Git are NOT needed on this machine.
+2. That is all. Node.js, Flutter, Git and a separate PostgreSQL installation are NOT needed.
 
 If the program reports that the server did not start
 ----------------------------------------------------
@@ -437,8 +433,8 @@ backend\pg\            pg_dump and pg_restore for full database backups
 icons\                  the KAYAN logo: app_icon.ico (the icon of the program
                         and of its shortcuts) and Kayan.png (the source)
 
-Nothing in this folder is a secret. The settings and the signing keys live in
-%APPDATA%\KAYAN-ERP\ on the machine that runs it.
+Nothing in this folder is a secret. Protected database settings live in
+%ProgramData%\KAYAN-ERP\kayan.env; logs and backups live in %APPDATA%\KAYAN-ERP\.
 "@
 Set-Content -Path (Join-Path $appFolder "README.txt") -Value $note -Encoding UTF8
 
