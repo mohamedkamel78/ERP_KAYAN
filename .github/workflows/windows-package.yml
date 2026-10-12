@@ -85,8 +85,7 @@ jobs:
       - name: Install Inno Setup (the installer a customer runs)
         shell: pwsh
         run: |
-          # The package is the deliverable: the single setup installer
-          # one-file installer must come out of every build, so the compiler
+          # The single setup installer must come out of every build, so the compiler
           # that makes the installer is installed here rather than left to
           # chance. Inno Setup is free and leaves no runtime dependency in
           # the customer's installation.
