@@ -4,7 +4,7 @@
   API server, with no terminal, no Node on PATH and no commands to type.
 
 .DESCRIPTION
-  The result is a folder (and a .zip beside it) shaped like this:
+  The result is a folder shaped like this:
 
       KAYAN-ERP\
         erp_kayan.exe                 the program
@@ -15,10 +15,9 @@
         backend\scripts\              database preparation
         backend\node\node.exe         a Node runtime that ships with the app
 
-  Beside the folder it also produces KAYAN-ERP-windows.zip, and - when Inno
-  Setup is installed on this machine - KAYAN-ERP-Setup-<version>.exe, the single
-  file a customer double-clicks. Only the build machine needs Flutter, Node and
-  (optionally) Inno Setup.
+  The only customer deliverable is KAYAN-Setup.exe. The assembled folder is
+  an intermediate build input and is not published as a ZIP. Only the build
+  machine needs Flutter, Node and Inno Setup.
 
   Run this from the repository root, on a Windows machine, with Flutter and
   Node installed for *building* (the end user needs neither).
@@ -27,7 +26,7 @@
   Where to assemble. Default: build\desktop
 
 .PARAMETER SkipZip
-  Skip producing the .zip (assembly only).
+  Do not create a ZIP; the only supported deliverable is the installer.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1
@@ -443,14 +442,7 @@ Nothing in this folder is a secret. The settings and the signing keys live in
 "@
 Set-Content -Path (Join-Path $appFolder "README.txt") -Value $note -Encoding UTF8
 
-# ---------------------------------------------------------------- zip
-if (-not $SkipZip) {
-  $zipPath = Join-Path $stage "KAYAN-ERP-windows.zip"
-  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-  Write-Host ""
-  Write-Host "      packing the .zip (this takes a minute)"
-  Compress-Archive -Path (Join-Path $appFolder "*") -DestinationPath $zipPath
-}
+# The assembled folder is an intermediate input only. Never create a ZIP.
 
 # ------------------------------------------------------- 7. installer (optional)
 Step "8/8" "Making the installer a customer can run"
@@ -471,17 +463,11 @@ if ($iscc) {
   & $iscc.Source "/DSourceDir=$appFolder" "/DOutputDir=$stage" `
                  (Join-Path $root "scripts\installer-windows.iss")
   if ($LASTEXITCODE -ne 0) { Fail "Inno Setup ran but did not produce the installer." }
-  $installer = Join-Path $stage "KAYAN-ERP-Setup-1.0.0.exe"
-  Write-Host "      installer written"
-  if (Test-Path $installer) {
-    Copy-Item $installer (Join-Path $stage "KAYAN-Setup.exe") -Force
-    Write-Host "      created alias: KAYAN-Setup.exe"
-  }
+  $installer = Join-Path $stage "KAYAN-Setup.exe"
+  if (-not (Test-Path $installer)) { Fail "Inno Setup completed but KAYAN-Setup.exe was not created." }
+  Write-Host "      installer written: $installer"
 } else {
-  Write-Host "      Inno Setup is not on this machine, so no .exe installer was made."
-  Write-Host "      The folder and the .zip above are complete and can be copied as they are."
-  Write-Host "      For a one-file installer: install Inno Setup 6 from https://jrsoftware.org/isdl.php"
-  Write-Host "      and run this script again."
+  Fail "Inno Setup 6 is required to create the only supported deliverable, KAYAN-Setup.exe."
 }
 
 $size = (Get-ChildItem $appFolder -Recurse -Force | Measure-Object -Property Length -Sum).Sum
@@ -492,9 +478,6 @@ Write-Host "============================================================"
 Write-Host ""
 Write-Host "  Program folder : $appFolder"
 Write-Host "  Total size     : $([math]::Round($size / 1MB, 1)) MB"
-if (-not $SkipZip) {
-  Write-Host "  Zip            : $(Join-Path $stage 'KAYAN-ERP-windows.zip')"
-}
 if ($installer) {
   Write-Host "  Installer      : $installer   <- the file a customer runs" -ForegroundColor Green
 }
