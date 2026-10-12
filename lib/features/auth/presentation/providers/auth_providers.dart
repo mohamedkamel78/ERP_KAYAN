@@ -42,6 +42,16 @@ class AuthController extends AsyncNotifier<AppUser?> {
   @override
   Future<AppUser?> build() async {
     final repository = ref.read(authRepositoryProvider);
+
+    // A session that has run out is renewed silently by the API client. When
+    // it cannot be renewed - the refresh token is spent, expired or gone -
+    // there is no session left, and the honest thing is to say so rather
+    // than leave every screen answering "Invalid or expired token".
+    ref.read(apiClientProvider).onSessionExpired = () async {
+      await repository.signOut();
+      ref.invalidateSelf();
+    };
+
     final result = await repository.restoreSession();
     return result.valueOrNull;
   }

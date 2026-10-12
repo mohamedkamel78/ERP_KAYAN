@@ -1179,4 +1179,126 @@ class AppLocalizationsAr extends AppLocalizations {
 
   @override
   String get companySettingsHint => 'الاسم والشعار والتواصل والفروع';
+
+  @override
+  String get downloadStarted => 'جارٍ تنزيل الملف.';
+
+  @override
+  String get downloadFailedTitle => 'تعذّر تنزيل الملف.';
+
+  @override
+  String get printOpened => 'تُفتح صفحة الطباعة في تبويب جديد.';
+
+  @override
+  String get printBlocked => 'حجب المتصفح التبويب الجديد. اسمح بالفتح في تبويب جديد لهذا العنوان ثم اضغط طباعة مرة أخرى.';
+
+  @override
+  String get resetData => 'إعادة ضبط بيانات البرنامج';
+
+  @override
+  String get resetDataHint => 'يحذف بيانات هذه الشركة ويعيد البرنامج إلى أول تشغيل. تؤخذ نسخة احتياطية ويتم التأكد منها قبل حذف أي شيء، وتتوقف العملية إن تعذّر ذلك.';
+
+  @override
+  String get resetButton => 'إعادة ضبط بيانات البرنامج';
+
+  @override
+  String get resetOnlyAdmins => 'لا يمكن تنفيذ هذا إلا بصلاحية مدير البرنامج.';
+
+  @override
+  String resetForCompany(Object company) {
+    return 'ستتم إعادة ضبط بيانات «$company».';
+  }
+
+  @override
+  String get resetWhatIsDeleted => 'ما سيتم حذفه';
+
+  @override
+  String get resetWhatIsKept => 'ما سيبقى';
+
+  @override
+  String get resetDeletedHint => 'كل ما تحمله الشركة من سجلات: دفاترها وأطرافها ومخزونها ومستنداتها.';
+
+  @override
+  String get resetKeptAdmin => 'حساب المدير الذي تستخدمه الآن';
+
+  @override
+  String get resetKeptPermissions => 'قائمة الصلاحيات';
+
+  @override
+  String get resetKeptRoles => 'الأدوار التي يأتي بها البرنامج';
+
+  @override
+  String get resetKeptConfig => 'إعدادات الاتصال بقاعدة البيانات وإعدادات البرنامج';
+
+  @override
+  String get resetCountJournalEntries => 'قيود اليومية';
+
+  @override
+  String get resetCountAccounts => 'الحسابات';
+
+  @override
+  String get resetCountCustomers => 'العملاء';
+
+  @override
+  String get resetCountSuppliers => 'الموردون';
+
+  @override
+  String get resetCountItems => 'الأصناف';
+
+  @override
+  String get resetCountSalesInvoices => 'فواتير البيع';
+
+  @override
+  String get resetCountPurchaseInvoices => 'فواتير الشراء';
+
+  @override
+  String get resetCountStockMovements => 'حركات المخزون';
+
+  @override
+  String get resetCountFiscalPeriods => 'الفترات المالية';
+
+  @override
+  String get resetCountBranches => 'الفروع';
+
+  @override
+  String get resetCountUsers => 'المستخدمون الآخرون';
+
+  @override
+  String get resetBackupFirst => 'تؤخذ نسخة احتياطية كاملة ويتم التأكد من صحتها قبل حذف أي شيء. وإن تعذّر أخذ النسخة أو التحقق منها فلن يُحذف شيء.';
+
+  @override
+  String get resetConfirmTitle => 'لا يمكن التراجع عن هذا';
+
+  @override
+  String resetConfirmBody(Object word) {
+    return 'العودة تكون فقط باستعادة النسخة التي ستؤخذ الآن. اكتب كلمة المرور وكلمة $word للمتابعة.';
+  }
+
+  @override
+  String get resetPasswordLabel => 'كلمة المرور';
+
+  @override
+  String get resetPasswordHint => 'كلمة مرور الحساب الذي تستخدمه الآن، ويتحقق منها الخادم.';
+
+  @override
+  String resetWordLabel(Object word) {
+    return 'اكتب $word';
+  }
+
+  @override
+  String resetWrongWord(Object word) {
+    return 'اكتب $word تماماً كما هي للتأكيد.';
+  }
+
+  @override
+  String resetDone(Object file) {
+    return 'تم حذف بيانات الشركة. تحتوي «$file» على البيانات القديمة.';
+  }
+
+  @override
+  String get resetNeedsSetup => 'سيطلب البرنامج إعداده من جديد عند فتحه في المرة القادمة.';
+
+  @override
+  String get resetPreviewFailed => 'تعذّر قراءة ما ستزيله إعادة الضبط.';
+
 }

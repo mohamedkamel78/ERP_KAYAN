@@ -1,0 +1,48 @@
+# KAYAN ERP - HTTPS in front of the program, with Caddy
+#
+# What this file is: the whole of what an installation needs to be reachable
+# from outside the building without the program holding a certificate. Caddy
+# asks Let's Encrypt for one, renews it, and turns to the KAYAN server over
+# plain HTTP on this machine only.
+#
+# To use it:
+#   1. Point the domain's A record at this network's public address, and let
+#      the router forward 443 (and 80, for the certificate check) to this box.
+#   2. Keep port 3000 closed to the internet: it is the internal side.
+#   3. Copy this file to Caddy's Caddyfile, put the real domain in the site
+#      address, and start Caddy.
+#   4. Start KAYAN with TRUST_PROXY=loopback (it is the same machine, and a
+#      value that does not parse is refused rather than guessed at). Add
+#      KAYAN_REQUIRE_HTTPS=true once HTTPS is known to work, and add
+#      https://kayan.example.com to CORS_ORIGINS if NODE_ENV=production.
+#
+# Caddy sends X-Forwarded-For and X-Forwarded-Proto on its own; that is the
+# pair the server reads, and the pair TRUST_PROXY says to believe.
+
+kayan.example.com {
+	# The certificate, the renewal and the redirect from http:// are all
+	# Caddy's business the moment an https:// site address is written.
+	encode gzip
+
+	# The whole program - client and API - from one origin, so a browser on a
+	# phone is not mixing an https page with an http API (which it would
+	# refuse outright as mixed content).
+	reverse_proxy 127.0.0.1:3000 {
+		header_up Host {upstream_hostport}
+	}
+
+	# One file at most, and it is the log of what came in - not the ledger,
+	# not the tokens, not the addresses that carry a one-minute download ticket.
+	log {
+		output file C:/kayan/logs/caddy-access.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+	}
+
+	handle /api/v1/health {
+		# A probe a monitoring system can keep over HTTP-less headers: the
+		# server never redirects this path, so this stays answerable.
+		reverse_proxy 127.0.0.1:3000
+	}
+}

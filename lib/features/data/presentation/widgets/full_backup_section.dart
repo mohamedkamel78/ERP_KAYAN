@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/platform/browser_actions.dart';
 import '../../../../core/platform/picked_file.dart';
 import '../../../../shared/extensions/l10n_extension.dart';
+import '../../../../shared/widgets/download_feedback.dart';
 import '../providers/data_providers.dart';
 
 /// Full-database backup and restore: «النسخ الاحتياطي والاستعادة».
@@ -82,10 +83,10 @@ class _FullBackupSectionState extends ConsumerState<FullBackupSection> {
     }
   }
 
-  Future<void> _download(String name) async {
-    final url = await ref.read(reportLinkProvider).fullBackupDownload(name);
-    openInNewTab(url);
-  }
+  Future<void> _download(String name) => runDownload(
+    context,
+    ref.read(reportLinkProvider).fullBackupDownload(name),
+  );
 
   Future<void> _delete(String name) async {
     final l10n = context.l10n;
@@ -196,7 +197,14 @@ class _FullBackupSectionState extends ConsumerState<FullBackupSection> {
   }
 
   Future<void> _uploadAndRestore() async {
-    final picked = await pickFile(extensions: ['.dump']);
+    PickedFile? picked;
+    try {
+      picked = await pickFile(extensions: ['.dump']);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _failure = describeApiError(error));
+      return;
+    }
     if (picked == null) return;
     await _restore(file: picked);
   }

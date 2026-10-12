@@ -5,10 +5,16 @@ import '../error/failure.dart';
 import '../logging/app_logger.dart';
 import '../storage/token_store.dart';
 
+/// Called when the session cannot be renewed: the refresh token is gone,
+/// spent or expired, and the only honest answer is to sign the person out.
+typedef SessionExpiredHandler = Future<void> Function();
+
 /// Thin, testable wrapper around [Dio].
 ///
 /// Responsibilities:
 ///  * attach the bearer token to outgoing requests
+///  * renew a session that has run out, so a quarter of an hour is not a
+///    reason to be thrown back to the sign-in screen
 ///  * translate transport errors into typed [Failure]s
 ///  * never log credentials, tokens or financial payloads
 class ApiClient {
@@ -37,9 +43,44 @@ class ApiClient {
           }
           handler.next(options);
         },
-        onError: (e, handler) {
-          _log.warning('HTTP error: ${e.type} ${e.response?.statusCode}');
+        onError: (e, handler) async {
+          // A sign-in token lives for a few minutes on purpose. Nobody
+          // should be asked to sign in again in the middle of the working
+          // day, so a refusal is given one chance to be a token that simply
+          // ran out: renew it, then send the very same request again.
+          //
+          // Financial Periods was where this showed itself — the first
+          // screen somebody opens a while after signing in, by which time
+          // the token had expired and every call behind that screen started
+          // answering "Invalid or expired token".
+          if (_isSessionRefusal(e) &&
+              e.requestOptions.extra[_skipRenewal] != true) {
+            final renewed = await _renewSession();
+            if (renewed) {
+              try {
+                final retried = await _dio.fetch<dynamic>(
+                  _authorised(e.requestOptions),
+                );
+                return handler.resolve(retried);
+              } on DioException {
+                // The renewal worked but the request itself did not; the
+                // original failure is the one worth reporting.
+              }
+            } else if (!_expiryAnnounced) {
+              _expiryAnnounced = true;
+              await _tokenStore.clear();
+              await onSessionExpired?.call();
+            }
+          }
           handler.next(e);
+        },
+        onResponse: (response, handler) {
+          // A request that worked means there is a session again, so the next
+          // one that runs out is worth announcing. Without this the app would
+          // sign the person out for a refusal that belonged to an earlier
+          // session.
+          _expiryAnnounced = false;
+          handler.next(response);
         },
       ),
     );
@@ -53,7 +94,92 @@ class ApiClient {
   final AppConfig _config;
   static final _log = AppLogger.of('ApiClient');
 
+  /// Set by whoever owns the session, so a session that cannot be renewed
+  /// ends in a sign-out rather than in a screen full of errors.
+  SessionExpiredHandler? onSessionExpired;
+
+  /// A renewal already under way. Several requests fail at once when a token
+  /// runs out, and only one of them may spend the refresh token — the rest
+  /// wait for it, because spending it twice revokes the first renewal.
+  Future<bool>? _renewing;
+
+  /// Whether the current session has already been announced as over.
+  ///
+  /// Ending a session is itself a request — `POST /auth/logout` — and it is
+  /// made with the token that has just been cleared, so it answers `401` like
+  /// any other call would. Left alone, that refusal is read as a second
+  /// expired session, which signs out again: the loop ran 2999 times in one
+  /// minute on a recorded run, spent the whole rate limit of one address, and
+  /// behind it every download, print and report was refused. A refusal that
+  /// ends a session is therefore announced once, and the latch is released by
+  /// the next request that succeeds.
+  bool _expiryAnnounced = false;
+
+  static const _skipRenewal = 'skipSessionRenewal';
+
   Dio get raw => _dio;
+
+  /// A 401 that is about the session rather than about permission.
+  ///
+  /// 403 means "you may not": renewing the session will not change that, and
+  /// trying would only add a delay before the same answer.
+  bool _isSessionRefusal(DioException e) =>
+      e.response?.statusCode == 401 &&
+      !_endsOrRenewsTheSession.contains(e.requestOptions.path);
+
+  /// Paths whose `401` cannot be repaired by this client: `/auth/refresh`
+  /// answers for the renewal itself, and `/auth/logout` is what ending the
+  /// session does. See [_expiryAnnounced].
+  static const _endsOrRenewsTheSession = {_refreshPath, _logoutPath};
+  static const _logoutPath = '/auth/logout';
+
+  RequestOptions _authorised(RequestOptions options) {
+    // The interceptor runs again for the retry and would attach the old
+    // token, so the new one is put on here and the retry is allowed to keep
+    // it.
+    options.extra[_skipRenewal] = true;
+    return options;
+  }
+
+  /// Exchanges the refresh token for a new pair.
+  ///
+  /// The server rotates refresh tokens: the one sent here is spent, and only
+  /// the one that comes back will work next time. That is why concurrent
+  /// failures share a single renewal.
+  Future<bool> _renewSession() {
+    final inFlight = _renewing;
+    if (inFlight != null) return inFlight;
+    final renewal = _exchangeRefreshToken();
+    _renewing = renewal;
+    return renewal.whenComplete(() => _renewing = null);
+  }
+
+  Future<bool> _exchangeRefreshToken() async {
+    try {
+      final refreshToken = await _tokenStore.readRefreshToken();
+      if (refreshToken == null || refreshToken.isEmpty) return false;
+
+      final response = await _dio.post<Map<String, dynamic>>(
+        _refreshPath,
+        data: <String, dynamic>{'refreshToken': refreshToken},
+        options: Options(extra: <String, dynamic>{_skipRenewal: true}),
+      );
+      final data = response.data ?? const <String, dynamic>{};
+      final accessToken = data['accessToken'] as String?;
+      if (accessToken == null || accessToken.isEmpty) return false;
+
+      // Only the refresh token that came back will be good next time.
+      await _tokenStore.saveTokens(
+        accessToken: accessToken,
+        refreshToken: data['refreshToken'] as String?,
+      );
+      return true;
+    } on DioException {
+      return false;
+    }
+  }
+
+  static const _refreshPath = '/auth/refresh';
 
   Future<Map<String, dynamic>> get(
     String path, {

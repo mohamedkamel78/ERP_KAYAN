@@ -19,6 +19,16 @@ iOS, Windows, macOS, Linux and Web** from a single codebase.
 | `scripts/verify-package.ps1` | Asks whether a built copy is really shippable - no database needed |
 | `.github/workflows/windows-package.yml` | Builds it on a real Windows machine and publishes the result |
 | `tools/backend_shape_check.dart` | Proves the desktop and the web backend layer still agree |
+| `docs/BACKUP_RESTORE.md` | Full backup and restore: what a file holds, and the five gates a restore passes before it touches data (Arabic) |
+| `docs/DEMO_BACKUP.md` | The one demo backup file — what fictional company is inside it, where to download it, how to restore it without losing anything |
+| `docs/NETWORK_ACCESS.md` | Opening the program from the phones and desks on the company network, and what HTTPS in front of it needs (Arabic) |
+| `scripts/lan-access.ps1` | Which addresses really work on this machine, whether the firewall lets the port through, and `-OpenFirewall` |
+| `deploy/Caddyfile.example`, `deploy/kayan.nginx.conf.example` | The TLS proxy an installation outside the building is reached through |
+| `backend/scripts/api-check.mjs` | Drives every route the way the screens do, over a real PostgreSQL — 58 checks, from a backup to a reset |
+| `backend/scripts/build-demo-backup.mjs` | Builds the demo backup with the program's own route and restores it in a throwaway database |
+| `tools/browser/app_actions_check.mjs` | The same promises in a real browser: downloads, the print page, choosing a file, a full backup |
+| `.github/workflows/web-ci.yml` | Backend tests, the API check on a live database, Flutter analyse/test/web build, and the browser check |
+| `.github/workflows/demo-backup.yml` | Builds and verifies the demo backup file, and attaches it to the run |
 
 The built Windows copy is published as a release, so nobody has to build it to
 run it: <https://github.com/mohamedkamel78/ERP_KAYAN/releases>. The installer is

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../shared/extensions/l10n_extension.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../providers/locale_provider.dart';
+import '../widgets/reset_data_card.dart';
 
 /// Application settings.
 ///
@@ -81,6 +82,10 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
         ),
+        const SizedBox(height: 16),
+        // Only an administrator sees this, and only when there is something
+        // to reset. Everything about it is enforced again on the server.
+        const ResetDataCard(),
         const SizedBox(height: 16),
         Card(
           child: Column(

@@ -1,8 +1,32 @@
 # جرد المتطلبات — Requirements Audit
 
-آخر تحديث: 2026-10-11 (بعد الدمج مع `main` عند `6794a3e` والتحقق المحلي).
-الحالة من أربعة قيم: ✅ منفذ ومختبَر فعلياً · 🟡 منفذ جزئياً · 🔵 موجود لكن غير مختبَر · ❌ غير منفذ.
+آخر تحديث: 2026-10-12 (جلسة «تكملة CI والنسخ الاحتياطي والبيانات التجريبية» —
+الفرع `arena/43cdf143-erp-kayan`، وهو `arena/279eb1f7-erp-kayan` زائد أعمال هذه
+الجلسة؛ لا شيء من العمل السابق حُذف). الحالة من أربعة قيم:
+✅ منفذ ومختبَر فعلياً · 🟡 منفذ جزئياً · 🔵 موجود لكن غير مختبَر · ❌ غير منفذ.
 كل اختبار مذكور هنا **شُغّل فعلاً**؛ وما لم يُشغَّل مكتوب صراحةً مع السبب.
+
+## الجولة الحالية (2026-10-12) — المطلوب من المستخدم، بنداً بنداً
+
+| # | البند | الحالة | الإثبات (تشغيل فعلي، لا وصف كود) |
+|---|---|---|---|
+| 1 | تذاكر تنزيل قصيرة العمرة وكل مواضع استخدامها | ✅ | `api-check.mjs` §4b و§4d: تذاكر بصلاحية دقيقة، الـaccess token مرفوض في العنوان (401)، التذكرة لا تُقبل كـBearer، و**مسح لكل عنوان تضعه الأزرار** (`/exports/**`, `/import/templates/**`) بثلاثين+ مساراً: كلها 200 بالتذكرة وحدها وبلا هيدر، والمفتاح مقفول بدونها. CI job *API checks against a real database* أخضر. |
+| 2 | إعادة ضبط البيانات للمدير فقط، بكلمة سر وتأكيد ونسخة موثَّقة | ✅ | `reset.service.spec.ts` (13 حالة: كلمة سر خاطئة 401، تأكيد ناقص 400، كلمة السر لا تظهر في السجل) + `api-check.mjs` §7 على PostgreSQL حقيقية: معاينة العدّادات، رفض كلمة السر الخاطئة، رفض `reset` بدل `RESET`، `reset:true` مع ملف نسخة حقيقي، مسح بيانات الشركة، والسجل فيه `RESET` بلا كلمة السر. |
+| 3 | ملف نسخة تجريبية واحد بحقيقي بالصيغة المدعومة، مُستعاد فعلياً | ✅ | workflow *Demo backup file*: `npm run build:demo` يبني `kayan-demo-backup-<date>.dump` (PGDMP custom) من مسار البرنامج نفسه، يستعيده في قاعدة مؤقتة ويتأكد من الأرقام بعده، ثم يحطّه في قاعدة ثالثة فارغة لإثبات أنه يحمل بنيته. الـartifact `kayan-demo-backup` منشور مع SHA256، والنتيجة (N/M checks passed) بقت تُنشر كـnotice على صفحة الـrun. |
+| 4 | إنشاء/اختيار/رفع/تنزيل/تحقق/استعادة | ✅ للأجزاء الخلفية | `api-check.mjs` §3–§6: إنشاء، ظهور الملف في القائمة، تنزيل بميلغ attach، رفض ملف ليس dump (400) دون لمس البيانات، رفض الاستعادة بلا confirm، استعادة مع rehearsal في قاعدة مؤقتة + نسخة أمان + تحقق، والبرنامج يرد بعدها. `full-backup.service.spec.ts` (4 حالات). |
+| 5 | الطباعة والتنزيلات في كل البرنامج | 🟡 | سيرفرًا: صفحات الطباعة HTML/RTL وxlsx/csv تُنزَّل بالتذكرة (فوق). في متصفح حقيقي: `tools/browser/app_actions_check.mjs` — التنزيل من شاشة النسخ الاحتياطي والـPGDMP ✓، وباقي الأزرار (Excel/طباعة/قالب) لا تزال تُرفض بثلاثة 401، يجري تحديد عنوانها بالضبط (التشغيل فيه `HTTP <status> <method> <path>` لكل طلب مرفوض). |
+| 6 | تدفق الاستيراد الكامل وdry-run آمن | ✅ | `import.service.spec.ts` (4) + `api-check.mjs` §6: تنزيل القالب، إرجاعه كما هو يُقبل (`created:1, errors:0`)، صف ناقص يُسمّى بالعمود والسطر، وdry-run لا يكتب شيئاً (0 عميل بعدها). في الـFlutter test: `import_controller_test.dart` (جاف/ترجمة/تغيير الملف). |
+| 7 | خطأ Financial Periods `AuthFailure: Invalid or expired token` | ✅ | السبب: العميل كان يخزّن refresh token ولا يستخدمه. `api_client.dart` يجدّد مرة واحدة عند 401 ويعيد الطلب، والتجديدات المتزامنة تتشارك محاولة واحدة، ولو تعذّر التجديد يسجّل الخروج. `api-check.mjs` §4c يفحصه سيرفرًا: تجديد بـrefresh صالح، الرمز المجدد يفتح `/accounting/fiscal-periods`، إعادة استخدام refresh مرفوضة، ورمز مخترع يرد بجملة لا بانهيار. وفي هذه الجلسة وُجد سببان آخران لنفس العرض وأُصلحا: `restoreSession()` كان **يمسح** الرمز عند أي فشل (حتى انقطاع شبكة) فطرد المستخدم من كل نوافذ المتصفح — صار المسح فقط إذا قال السيرفر إن الرمز نفسه فاسد (`test/auth/auth_repository_restore_test.dart`)؛ و`POST /auth/logout` كان يرد 401 عند خروج بلا رمز، فكرر العميل تسجيل الخروج 2999 مرة في دقيقة حتى استنفد حد معدل العنوان (وهو ما كان يجعل كل التنزيلات تُرفض) — صار `@OptionalAuth()` وحلقة اختبار في `test/core/api_client_session_test.dart`. |
+| 8 | إصلاحات Flutter وanalyze وtests وbuild الويب | ✅ | CI job *Flutter Web Build*: `node tools/check-dart-imports.mjs` (كل الـimports تشير لملفات موجودة)، `flutter analyze` نظيف، `flutter test` أخضر، و`flutter build web --release` ينجح ويُنشر كـartifact `KAYAN-ERP-web`. |
+| 9 | اختبارات Backend وقاعدة بيانات وAPI وE2E في متصفح حقيقي | ✅ للسيرفر، 🟡 للمتصفح | Backend: 14 suite / **127** اختبار jest خضراء محلياً وفي CI (منها 4 جديدة لـ`@OptionalAuth`)، و`tsc --noEmit` و`nest build` نظيفان. API/DB: job *API checks against a real database* — **58 فحصاً نجحت** على PostgreSQL 16 حقيقية مع migrations وseed وبناء حقيقي. المتصفح: job *Browser checks* — **14/17** على التشغيل 38219578855؛ ما بقي بندان على شاشة الاستيراد (زر القالب وإغلاق حوار الملف مرتين) وسطر 401 واحد في اللوج، والتشخيص مكتوب في سطر 5. |
+| 10 | حزمة Windows: ZIP وinstaller | 🔵 | السكربتات موجودة و`verify-package.ps1` وworkflow *Windows package* يعملان على `pull_request`؛ آخر تشغيل كامل نجح كان على رأس PR #3، وتشغيل PR #4 أُلغي يدوياً (`The run was canceled by @mohamedkamel78`) قبل أن يكتمل. **نجح** على PR #5 لهذا الفرع: التشغيل 38220262694 على `windows-latest` — `flutter build windows` ثم `scripts/build-desktop-windows.ps1` ثم `verify-package.ps1` (الذي يفشل البناء إن نقص ZIP أو installer)، والناتج محفوظ كـartifact `KAYAN-ERP-windows` بحجم 284,546,206 بايت: <https://github.com/mohamedkamel78/ERP_KAYAN/actions/runs/38220262694>. التنزيل يحتاج تسجيل دخول إلى GitHub (artifact خاص بالسيرفر)؛ الإصدار العام يُنشر تلقائياً كـrelease عند وسم `v*` حسب رأس الملف الوصفي في `windows-package.yml`. لن يُدمج أي PR بأمرك. |
+| 11 | وصول آمن من أجهزة الشبكة وتحضير HTTPS | ✅ للتحضير | `network.ts` + 14 حالة اختبار: `TRUST_PROXY` (loopback/true/عدد الوسائط)، `KAYAN_REQUIRE_HTTPS` (308 لا يشمل `/api/v1/health`)، HSTS على TLS فقط، ورفض قيمة غير مفهومة مع رسالة في اللوج. الهيدرز الأربعة على كل رد (API والواجهة) مفحوصة في `api-check.mjs` على سيرفر حقيقي. `docs/NETWORK_ACCESS.md` + `scripts/lan-access.ps1` + `deploy/Caddyfile.example` + `deploy/kayan.nginx.conf.example`. |
+| 12 | الحفاظ على كل ما سبق | ✅ | الفرق بين `origin/main` وهذا الفرع: ~9.4 ألف سطر إضافة في 75+ ملفاً، بلا حذف أي ميزة؛ `git merge-base` يؤكد أن رأس PR #4 داخل هذا الفرع، وأعمال PR #3 كلها أجدّ منها نسخة مكتملة هنا. |
+
+**ما لم يُشغَّل في هذه البيئة ولماذا:** لا Flutter SDK ولا Chrome ولا PostgreSQL في
+sandbox المطوّر، لذلك `flutter analyze/test/build web` وفحص المتصفح وتشغيل الـAPI
+حياً — كلها تتشغّل على الـrunner وتُقرأ نتائجها من الـrun (روابط في التقرير)،
+لا من وصفي أنا. وحزم Windows تُبنى على `windows-latest` فقط.
 
 ---
 

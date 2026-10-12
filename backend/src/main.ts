@@ -1,11 +1,27 @@
 import { existsSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NextFunction, Request, Response } from 'express';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import {
+  allowsOrigin,
+  configuredOrigins as corsConfiguredOrigins,
+} from './common/config/cors';
+import { secretsProblem as jwtSecretsProblem } from './common/config/jwt-secrets';
+import {
+  clientSecurityHeaders,
+  describeAccess,
+  hstsEnabled,
+  hstsMaxAgeSeconds,
+  httpsRedirectRequired,
+  httpsRedirectTarget,
+  lanAddresses,
+  proxyTrust,
+  proxyTrustWarning,
+} from './common/config/network';
 import { ProblemDetailsFilter } from './common/filters/problem-details.filter';
 
 async function bootstrap() {
@@ -13,6 +29,24 @@ async function bootstrap() {
     bufferLogs: true,
   });
   const logger = new Logger('Bootstrap');
+
+  // Signing keys first. Without them the program can serve its own login
+  // screen and then fail on the first sign-in with a message that names
+  // nothing, so the check belongs here, at start-up, where it is read by the
+  // person who started it rather than by the person trying to sign in.
+  //
+  // On a real installation that is a reason not to start at all: a program
+  // that cannot issue a token is not a program anyone can use. While
+  // developing, it is only a warning, because a checkout with no .env is a
+  // normal thing to have.
+  const secretsProblem = jwtSecretsProblem();
+  if (secretsProblem) {
+    if (process.env.NODE_ENV === 'production') {
+      logger.error(secretsProblem);
+      throw new Error(secretsProblem);
+    }
+    logger.warn(secretsProblem);
+  }
 
   app.setGlobalPrefix('api/v1');
 
@@ -34,29 +68,70 @@ async function bootstrap() {
   // ports breaks sign-in with a misleading "cannot reach the server" error.
   // Outside production every localhost origin is therefore accepted; in
   // production only the origins listed in CORS_ORIGINS are.
-  const configuredOrigins = (process.env.CORS_ORIGINS ?? '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+  const configuredOrigins = corsConfiguredOrigins(process.env.CORS_ORIGINS);
   const isProduction = process.env.NODE_ENV === 'production';
-  const isLanOrLocalOrigin =
-    /^https?:\/\/(localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[a-zA-Z0-9-]+\.local)(:\d+)?$/;
 
   app.enableCors({
     origin: (
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean) => void,
     ) => {
-      // Requests without an Origin header come from clients that CORS does not
-      // apply to: native apps, curl, the mobile build.
-      if (!origin) return callback(null, true);
-      if (configuredOrigins.includes(origin)) return callback(null, true);
-      if (isLanOrLocalOrigin.test(origin)) return callback(null, true);
-      if (!isProduction) return callback(null, true);
+      // The rule itself lives in one place and is tested there: see
+      // common/config/cors.ts.
+      if (allowsOrigin(origin, configuredOrigins, isProduction)) {
+        return callback(null, true);
+      }
       logger.warn(`Blocked CORS request from origin: ${origin}`);
       return callback(null, false);
     },
     credentials: true,
+  });
+
+  // Who is calling, and over what.
+  //
+  // Behind a TLS-terminating proxy - the only sane way to let someone outside
+  // the building in - every request arrives from the proxy's address over the
+  // proxy's port. Left as it is, the rate limiter counts the whole office as
+  // one person, `req.secure` is false while the browser is on HTTPS, and the
+  // host a redirect is built from is the internal one. Express reads the
+  // forwarded headers for all three, but only when it is told which proxies to
+  // believe: `TRUST_PROXY=loopback` for a proxy on this machine, `true` when
+  // nothing else can reach this port, or a count of the proxies in front.
+  const proxy = proxyTrust();
+  const proxyWarning = proxyTrustWarning();
+  if (proxyWarning) logger.warn(proxyWarning);
+  if (proxy !== false) {
+    app.set('trust proxy', proxy);
+  }
+
+  // The headers every answer carries, and the one redirect an HTTPS-only
+  // deployment asks for. Written here rather than in a package because the
+  // whole list is four lines and a package would add a dependency that has to
+  // be watched for the same four lines.
+  const requireHttps = httpsRedirectRequired();
+  const sendHsts = hstsEnabled();
+  const hstsMaxAge = hstsMaxAgeSeconds();
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    const secure = request.secure === true || request.protocol === 'https';
+    for (const [name, value] of Object.entries(
+      clientSecurityHeaders({ secure, hsts: sendHsts, hstsMaxAgeSeconds: hstsMaxAge }),
+    )) {
+      response.setHeader(name, value);
+    }
+    const away = httpsRedirectTarget({
+      required: requireHttps,
+      secure,
+      host: request.headers.host,
+      url: request.originalUrl ?? request.url,
+    });
+    if (away) {
+      // 308 rather than 301 or 302: it keeps the method and the body, so a
+      // signed POST that is sent to the wrong port is not quietly turned into
+      // a GET that says nothing useful when it fails.
+      response.redirect(308, away);
+      return;
+    }
+    next();
   });
 
   // If a built copy of the web client sits next to the API, serve it from the
@@ -106,16 +181,14 @@ async function bootstrap() {
   const host = process.env.HOST ?? '0.0.0.0';
   await app.listen(port, host);
   logger.log(`API listening on http://${host}:${port}/api/v1`);
-  logger.log(`Local web access: http://localhost:${port}`);
-  if (host === '0.0.0.0') {
-    const interfaces = networkInterfaces();
-    for (const name of Object.keys(interfaces)) {
-      for (const net of interfaces[name] ?? []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          logger.log(`Network LAN access (${name}): http://${net.address}:${port}`);
-        }
-      }
-    }
+  for (const line of describeAccess({
+    port,
+    host,
+    lan: lanAddresses(),
+    proxy,
+    requireHttps,
+  })) {
+    logger.log(line);
   }
   // A line the desktop shell can wait for, in addition to the health route.
   logger.log(`KAYAN-API-READY port=${port} host=${host}`);
