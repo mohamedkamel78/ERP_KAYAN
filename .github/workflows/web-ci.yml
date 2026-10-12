@@ -230,7 +230,7 @@ jobs:
             # The tool prefixes what it saw - LABELS, INPUTS, SCREEN,
             # LOGIN - so a failure says what the page really offered
             # instead of only that a click missed.
-            grep -E "^(FAIL|LABELS|INPUTS|SCREEN|LOGIN)|checks passed|the browser check itself broke" /tmp/browser.txt \
+            grep -E "^(FAIL|LABELS|INPUTS|SCREEN|LOGIN|CLICK)|checks passed|the browser check itself broke" /tmp/browser.txt \
               | head -40 | while IFS= read -r line; do
                 echo "::error::$line"
               done

@@ -281,8 +281,23 @@ async function main() {
       }
     }
 
-    /** The centre of the first Flutter semantic node whose name includes one of [names]. */
+    /**
+     * The centre of the smallest Flutter semantic node whose name includes
+     * one of [names].
+     *
+     * Smallest, not first: the accessibility tree is nested, and the outer
+     * node of the login screen carries the same words as the button inside
+     * it because it contains that button. Taking the first match clicks the
+     * middle of the whole screen. Taking the smallest clicks the control the
+     * words belong to.
+     */
     async function findNode(names, roles) {
+      const found = await findAllNodes(names, roles);
+      return found.length > 0 ? found[0] : null;
+    }
+
+    /** Every matching node, smallest first. */
+    async function findAllNodes(names, roles) {
       const wanted = names.map((name) => name.toLowerCase());
       return page.evaluate(
         (needles, roleList) => {
@@ -290,17 +305,22 @@ async function main() {
             roleList.length > 0
               ? roleList.map((role) => `[role="${role}"]`).join(', ')
               : 'flt-semantics, [role="button"], [role="menuitem"], [role="tab"], [role="textbox"], [role="link"]';
+          const matches = [];
           for (const node of Array.from(document.querySelectorAll(selector))) {
             const label = `${node.getAttribute('aria-label') || ''} ${node.textContent || ''}`;
             const lower = label.toLowerCase();
-            if (needles.some((needle) => lower.includes(needle))) {
-              const rect = node.getBoundingClientRect();
-              if (rect.width > 0 && rect.height > 0) {
-                return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-              }
-            }
+            if (!needles.some((needle) => lower.includes(needle))) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            matches.push({
+              x: rect.x + rect.width / 2,
+              y: rect.y + rect.height / 2,
+              area: rect.width * rect.height,
+              label: label.trim().slice(0, 40),
+            });
           }
-          return null;
+          matches.sort((a, b) => a.area - b.area);
+          return matches;
         },
         wanted,
         roles,
@@ -320,6 +340,7 @@ async function main() {
       while (Date.now() < deadline) {
         const at = await findNode(list, []);
         if (at) {
+          console.log(`CLICK ${step}: "${at.label}" at ${Math.round(at.x)},${Math.round(at.y)}`);
           await page.mouse.click(at.x, at.y);
           return true;
         }
@@ -382,15 +403,29 @@ async function main() {
       const inputs = await page.$$('input');
       const usable = [];
       for (const input of inputs) {
-        const hidden = await input.evaluate((node) => node.hidden || node.type === 'hidden');
-        if (!hidden) usable.push(input);
+        const box = await input.evaluate((node) => {
+          if (node.hidden || node.type === 'hidden') return null;
+          const rect = node.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) return null;
+          return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        });
+        if (box) usable.push({ input, box });
       }
       if (usable.length < values.length) return false;
       for (let index = 0; index < values.length; index += 1) {
-        await usable[index].click();
-        await usable[index].type(values[index], { delay: 20 });
+        // Flutter's text fields are drawn on the canvas; the <input> is a
+        // real element sitting on top of them, and a synthetic click on it
+        // does not always land. Clicking where it is does.
+        await page.mouse.click(usable[index].box.x, usable[index].box.y);
+        await page.keyboard.type(values[index], { delay: 20 });
       }
-      return true;
+      const filled = await page.$$eval('input', (nodes) =>
+        nodes.map((node) => node.value ?? ''),
+      );
+      console.log(
+        `INPUTS typed: ${JSON.stringify(filled.filter((value) => value !== ''))}`,
+      );
+      return filled.filter((value) => value !== '').length >= values.length;
     }
 
     let typed =
@@ -407,6 +442,10 @@ async function main() {
 
     const beforeLoginResponse = responses.length;
     await clickNamed(['تسجيل الدخول', 'Sign in'], { step: 'signin-button' });
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (!/login|signin|setup/.test(page.url())) break;
+      await wait(1000);
+    }
     const loginResponse = responses
       .slice(beforeLoginResponse)
       .find((entry) => /\/auth\/login/.test(entry.url));
