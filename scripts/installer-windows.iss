@@ -57,8 +57,8 @@ ArchitecturesInstallIn64BitMode=x64
 ; Program Files is what needs them. Protected DB settings live in ProgramData;
 ; logs and user backup files live in %APPDATA%, so the app folder stays read-only.
 PrivilegesRequired=admin
-; On uninstall, stop and unregister the PostgreSQL service before removing the
-; bundled binaries, but preserve the company database and protected settings.
+; PostgreSQL runtime, service, company data and protected settings live in ProgramData.
+; Uninstall only removes the app/firewall rule; it must not unregister the database.
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -96,7 +96,6 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags
 [UninstallRun]
 ; Unregister the service before its executable is removed. The script preserves
 ; %ProgramData%\KAYAN-ERP\pgdata and the protected runtime configuration.
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoProfile -File ""{app}\backend\scripts\manage-kayan-db.ps1"" -Action uninstall"; Flags: runhidden waituntilterminated
 Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""KAYAN ERP Server"""; Flags: runhidden
 
 [UninstallDelete]

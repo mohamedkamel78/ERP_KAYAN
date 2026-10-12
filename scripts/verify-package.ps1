@@ -134,7 +134,8 @@ Check "the PostgreSQL service controller ships with the installer" (Has "backend
 Check "the PostgreSQL client ships with the installer" (Has "backend\pg\bin\psql.exe")
 Check "the PostgreSQL server binary ships with the installer" (Has "backend\pg\bin\postgres.exe")
 Check "the PostgreSQL share data needed to initialize a cluster ships with it" (Has "backend\pg\share\postgres.bki")
-Check "libpq travels next to the tools (backend\pg\libpq.dll)" (Has "backend\pg\bin\libpq.dll")
+Check "the PostgreSQL PL/pgSQL extension library ships with it" (Has "backend\pg\lib\plpgsql.dll")
+Check "libpq travels next to the tools (backend\pg\bin\libpq.dll)" (Has "backend\pg\bin\libpq.dll")
 foreach ($toolName in @("initdb.exe", "pg_ctl.exe", "psql.exe", "postgres.exe")) {
   $toolPath = Join-Path $folder "backend\pg\bin\$toolName"
   if (Test-Path $toolPath) {

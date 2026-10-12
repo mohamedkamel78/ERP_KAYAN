@@ -50,6 +50,7 @@ function Find-PgBin {
   $root = Split-Path -Parent $scriptDir
 
   $candidates = @(
+    (Join-Path $env:ProgramData "KAYAN-ERP\pgsql\bin"),
     (Join-Path $root "backend\pg\bin"),
     (Join-Path $root "backend\pg"),
     (Join-Path $root "backend\pgsql\bin"),

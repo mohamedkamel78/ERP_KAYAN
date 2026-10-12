@@ -21,6 +21,10 @@ if (-not $service) {
   throw ("KAYAN_PostgreSQL was not installed as a persistent service." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
 }
 if ($service.Status -ne "Running") { throw "The installer did not start KAYAN_PostgreSQL." }
+$serviceInfo = Get-CimInstance Win32_Service -Filter "Name='KAYAN_PostgreSQL'" -ErrorAction Stop
+if ($serviceInfo.PathName -notlike "*$env:ProgramData\KAYAN-ERP\pgsql*") {
+  throw ("KAYAN_PostgreSQL is not using its persistent ProgramData runtime: " + $serviceInfo.PathName)
+}
 $settings = Join-Path $env:ProgramData "KAYAN-ERP\kayan.env"
 if (-not (Test-Path $settings)) { throw "The installer did not write the shared runtime settings file." }
 
