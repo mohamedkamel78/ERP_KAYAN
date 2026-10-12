@@ -53,6 +53,9 @@ class ErpShell extends ConsumerWidget {
           ? Row(
               children: [
                 NavigationRail(
+                  // Keep every ERP module reachable on short screens; in RTL
+                  // Flutter positions this rail on the right automatically.
+                  scrollable: true,
                   extended: width >= _extendedBreakpoint,
                   selectedIndex: selectedIndex,
                   onDestinationSelected: (index) =>
