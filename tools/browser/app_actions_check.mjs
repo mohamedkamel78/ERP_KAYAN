@@ -434,7 +434,6 @@ async function main() {
     });
     await wait(6000); // Flutter's first paint
     await shot('01-login');
-    await describe('01-login');
 
     const published = await publishedLabels();
     check(

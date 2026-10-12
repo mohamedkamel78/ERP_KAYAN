@@ -242,15 +242,25 @@ jobs:
             # The tool prefixes what it saw - LABELS, INPUTS, SCREEN,
             # LOGIN - so a failure says what the page really offered
             # instead of only that a click missed.
-            grep -E "^(FAIL|LABELS|INPUTS|SCREEN|LOGIN|CLICK|SERVER|DIED)|checks passed|the browser check itself broke" /tmp/browser.txt \
-              | head -40 | while IFS= read -r line; do
+            # GitHub keeps only the first ten annotations of a kind, so the
+            # ones that say what failed go out before the ones that say what
+            # the page looked like. Getting this the wrong way round is how
+            # a run filled its quota with the login screen and dropped the
+            # verdict.
+            grep -E "^(FAIL|DIED)|checks passed|the browser check itself broke" /tmp/browser.txt \
+              | head -12 | while IFS= read -r line; do
                 echo "::error::$line"
               done
-            # ...and whatever the log ended with, because a run that stops
+            # ...then whatever the log ended with, because a run that stops
             # mid-sentence is exactly the run whose ending matters most.
-            tail -25 /tmp/browser.txt | while IFS= read -r line; do
+            tail -12 /tmp/browser.txt | while IFS= read -r line; do
               echo "::error::tail: $line"
             done
+            # ...and only then the picture of the screen.
+            grep -E "^(LABELS|INPUTS|SCREEN|CLICK|LOGIN|SERVER)" /tmp/browser.txt \
+              | head -8 | while IFS= read -r line; do
+                echo "::error::$line"
+              done
             exit "$status"
           fi
 
