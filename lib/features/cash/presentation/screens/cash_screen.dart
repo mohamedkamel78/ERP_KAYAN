@@ -186,7 +186,13 @@ class _CashScreenState extends ConsumerState<CashScreen>
           kind: FieldKind.date,
           required: true,
         ),
-        FieldSpec('amount', l10n.amount, kind: FieldKind.decimal, required: true),
+        FieldSpec(
+          'amount',
+          l10n.amount,
+          kind: FieldKind.decimal,
+          required: true,
+          helper: l10n.settleOldestFirst,
+        ),
         FieldSpec('description', l10n.description, maxLines: 2),
       ],
       initial: {
@@ -232,29 +238,22 @@ class _CashScreenState extends ConsumerState<CashScreen>
       if (!mounted) return;
     }
 
+    final body = <String, dynamic>{
+      ...values,
+      'kind': isReceipt ? 'RECEIPT' : 'PAYMENT',
+    };
+    if (allocations.isNotEmpty) {
+      body['allocations'] = allocations;
+    } else if (partyId.isNotEmpty) {
+      // Nothing open to settle: the money is carried on account, which is only
+      // allowed when the voucher names the party it belongs to.
+      body[isReceipt ? 'customerId' : 'supplierId'] = partyId;
+    }
+
     await _run(() async {
-      await ref
-          .read(apiClientProvider)
-          .post(
-            '/cash/vouchers',
-            body: {
-              ...values,
-              'kind': isReceipt ? 'RECEIPT' : 'PAYMENT',
-              if (allocations.isNotEmpty)
-                'allocations': allocations
-              else if (partyId.isNotEmpty)
-                // No open invoice: the money is carried on account, which is
-                // only allowed when the voucher names the party it belongs to.
-                if (isReceipt) 'customerId': partyId else 'supplierId': partyId,
-            },
-          );
+      await ref.read(apiClientProvider).post('/cash/vouchers', body: body);
       _reloadAll();
-      if (mounted) {
-        showMessage(
-          context,
-          allocations.isEmpty ? l10n.saved : l10n.settleOldestFirst,
-        );
-      }
+      if (mounted) showMessage(context, l10n.saved);
     });
   }
 
@@ -353,13 +352,9 @@ class _CashScreenState extends ConsumerState<CashScreen>
         content: SizedBox(
           width: 640,
           height: 420,
-          child: Consumer(
-            builder: (context, ref, _) {
-              return _AccountStatement(
-                cashAccountId: text(account, 'id'),
-                locale: Localizations.localeOf(context).toString(),
-              );
-            },
+          child: _AccountStatement(
+            cashAccountId: text(account, 'id'),
+            locale: Localizations.localeOf(context).toString(),
           ),
         ),
         actions: [
