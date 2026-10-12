@@ -240,7 +240,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-          $tag = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "${{ github.ref_name }}" } else { "v1.0.0" }
+          $tag = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "${{ github.ref_name }}" } else { "v1.0.1" }
           $setup = Join-Path (Get-Location) "build\desktop\KAYAN-Setup.exe"
           if (-not (Test-Path $setup)) { throw "KAYAN-Setup.exe was not produced" }
           $files = @($setup)

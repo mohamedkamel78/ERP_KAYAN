@@ -358,7 +358,7 @@ if (-not (Test-Path (Join-Path $release "erp_kayan.exe"))) {
 Copy-Item (Join-Path $release "*") $appFolder -Recurse -Force
 
 Write-Host "      building Flutter Web client for browser and LAN access..."
-flutter build web --release --dart-define=APP_ENV=production
+flutter build web --release --dart-define=APP_ENV=production --dart-define=API_BASE_URL=/api/v1
 if ($LASTEXITCODE -eq 0) {
   $webSource = Join-Path $root "build\web"
   $webDest = Join-Path $backendFolder "web"

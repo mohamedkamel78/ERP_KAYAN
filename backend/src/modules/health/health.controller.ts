@@ -18,7 +18,10 @@ export class HealthController {
       const companyCount = await this.prisma.company.count({
         where: { deletedAt: null },
       });
-      needsSetup = companyCount === 0;
+      const userCount = this.prisma.user
+        ? await this.prisma.user.count({ where: { deletedAt: null } })
+        : 1;
+      needsSetup = companyCount === 0 || userCount === 0;
     } catch {
       database = 'down';
     }

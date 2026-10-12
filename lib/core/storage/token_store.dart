@@ -10,6 +10,7 @@ class TokenStore {
     : _secure = secureStorage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _secure;
+  final Map<String, String> _memoryFallback = <String, String>{};
 
   static const _kAccessToken = 'auth.access_token';
   static const _kRefreshToken = 'auth.refresh_token';
@@ -22,15 +23,27 @@ class TokenStore {
     required String accessToken,
     String? refreshToken,
   }) async {
-    await _secure.write(key: _kAccessToken, value: accessToken);
+    _memoryFallback[_kAccessToken] = accessToken;
     if (refreshToken != null) {
-      await _secure.write(key: _kRefreshToken, value: refreshToken);
+      _memoryFallback[_kRefreshToken] = refreshToken;
+    }
+    try {
+      await _secure.write(key: _kAccessToken, value: accessToken);
+      if (refreshToken != null) {
+        await _secure.write(key: _kRefreshToken, value: refreshToken);
+      }
+    } catch (_) {
+      // Keep in-memory session tokens if the OS keystore is unavailable.
     }
   }
 
   Future<void> clear() async {
-    await _secure.delete(key: _kAccessToken);
-    await _secure.delete(key: _kRefreshToken);
+    _memoryFallback.remove(_kAccessToken);
+    _memoryFallback.remove(_kRefreshToken);
+    try {
+      await _secure.delete(key: _kAccessToken);
+      await _secure.delete(key: _kRefreshToken);
+    } catch (_) {}
   }
 
   Future<String?> readLocale() async {
@@ -38,17 +51,22 @@ class TokenStore {
     return prefs.getString(_kLocale);
   }
 
-  Future<void> saveLocale(String languageCode) async {
+  Future<String?> saveLocale(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kLocale, languageCode);
+    return languageCode;
   }
 
   Future<String?> _read(String key) async {
     try {
-      return await _secure.read(key: key);
+      final value = await _secure.read(key: key);
+      if (value != null && value.isNotEmpty) {
+        _memoryFallback[key] = value;
+        return value;
+      }
     } catch (_) {
       // A corrupted/missing keystore entry must not crash the app.
-      return null;
     }
+    return _memoryFallback[key];
   }
 }

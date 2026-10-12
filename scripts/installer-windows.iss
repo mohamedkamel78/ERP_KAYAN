@@ -20,7 +20,7 @@
 #define AppName "KAYAN ERP"
 #define AppShortName "ERP_KAYAN"
 #define AppExe "erp_kayan.exe"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.1"
 #define AppPublisher "KAYAN Integrated Solutions"
 ; Both are passed in by scripts\build-desktop-windows.ps1, so a custom -Output
 ; folder stays in step. The values below are used when ISCC is run by hand.
@@ -91,7 +91,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{a
 
 [Run]
 Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""KAYAN ERP Server"" dir=in action=allow protocol=TCP localport=3000 profile=private,domain"; Flags: runhidden; StatusMsg: "Configuring Windows Firewall for local network access..."
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
 ; Unregister the service before its executable is removed. The script preserves

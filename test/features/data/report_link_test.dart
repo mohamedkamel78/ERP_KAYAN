@@ -89,12 +89,7 @@ void main() {
       final config = AppConfig.forLocalServer(server.baseUrl);
       container = ProviderContainer(
         overrides: [
-          // Two providers carry this name, one for each feature that needs
-          // to know where the server is. Both have to point at the test
-          // server, or the link would be built from one address and the
-          // ticket fetched from another.
           auth.appConfigProvider.overrideWithValue(config),
-          data.appConfigProvider.overrideWithValue(config),
           auth.tokenStoreProvider.overrideWithValue(FakeTokenStore()),
         ],
       );
@@ -103,6 +98,10 @@ void main() {
     });
 
     data.ReportLinkBuilder links() => container.read(data.reportLinkProvider);
+
+    test('auth and data share the exact same appConfigProvider instance', () {
+      expect(identical(auth.appConfigProvider, data.appConfigProvider), isTrue);
+    });
 
     test('a report file link carries the ticket and the chosen format', () async {
       final request = await links().file(

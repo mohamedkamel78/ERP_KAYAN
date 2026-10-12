@@ -133,6 +133,32 @@ try {
       throw ("The actual installed client did not start a healthy local server after 60 seconds." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
     }
     Write-Host "PASS: launching installed erp_kayan.exe by itself started the local API and health check passed."
+
+    $setupStatus = Invoke-RestMethod -Uri "http://127.0.0.1:3000/api/v1/setup/status" -TimeoutSec 5
+    if ($setupStatus.needsSetup -ne $false) {
+      throw ("Expected /api/v1/setup/status needsSetup=false after seeding, got: " + ($setupStatus | ConvertTo-Json -Compress))
+    }
+    Write-Host "PASS: /api/v1/setup/status reported needsSetup=false."
+
+    $loginPayload = @{
+      username = "ci-admin"
+      password = "CiSmoke-Admin-Password-7241"
+    } | ConvertTo-Json -Compress
+    $loginResponse = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:3000/api/v1/auth/login" -ContentType "application/json" -Body $loginPayload -TimeoutSec 10
+    if (-not $loginResponse.accessToken -or -not $loginResponse.refreshToken) {
+      throw "POST /api/v1/auth/login did not return accessToken and refreshToken."
+    }
+    if ($loginResponse.user.username -ne "ci-admin") {
+      throw ("POST /api/v1/auth/login returned unexpected username: " + $loginResponse.user.username)
+    }
+    Write-Host "PASS: POST /api/v1/auth/login succeeded against the installed desktop server."
+
+    $meResponse = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:3000/api/v1/auth/me" -Headers @{ Authorization = ("Bearer " + $loginResponse.accessToken) } -TimeoutSec 10
+    $meUsername = if ($meResponse.user) { $meResponse.user.username } else { $meResponse.username }
+    if ($meUsername -ne "ci-admin") {
+      throw ("GET /api/v1/auth/me returned unexpected user payload: " + ($meResponse | ConvertTo-Json -Compress))
+    }
+    Write-Host "PASS: GET /api/v1/auth/me verified authenticated session with the issued token."
   } finally {
     if ($client -and -not $client.HasExited) {
       $null = $client.CloseMainWindow()

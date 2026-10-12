@@ -292,33 +292,74 @@ switch ($Action) {
       }
     }
 
-    # Only write kayan.env if it does not already exist (or if an explicit
-    # -Password override was supplied), so existing company installations keep
-    # their JWT secrets and database credentials intact across upgrades.
-    if ((-not (Test-Path $envFile)) -or $Password) {
-      $encodedPw = [System.Uri]::EscapeDataString($appPassword)
-      $jwtSecret = New-RandomSecret 32
-      $jwtRefreshSecret = New-RandomSecret 32
-      $envContent = @(
-        "# Managed by KAYAN ERP service installer",
-        "HOST=0.0.0.0",
-        "PORT=3000",
-        "NODE_ENV=production",
-        "DATABASE_URL=postgresql://erp_app:$encodedPw@127.0.0.1:$Port/erp_kayan?schema=public",
-        "ADMIN_DATABASE_URL=postgresql://postgres@127.0.0.1:$Port/postgres",
-        "JWT_ACCESS_SECRET=$jwtSecret",
-        "JWT_SECRET=$jwtSecret",
-        "JWT_REFRESH_SECRET=$jwtRefreshSecret",
-        "JWT_ACCESS_TTL=900",
-        "JWT_REFRESH_TTL=1209600",
-        "CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,lan"
-      ) -join "`r`n"
-      [System.IO.File]::WriteAllText($envFile, ($envContent + "`r`n"), $utf8NoBom)
+    # Preserve existing database credentials and JWT secrets across upgrades,
+    # while ensuring required production keys (JWT_ACCESS_SECRET,
+    # JWT_REFRESH_SECRET, ADMIN_DATABASE_URL, CORS_ORIGINS) exist and stripping
+    # any legacy UTF-8 BOM.
+    $existingMap = @{}
+    if ((Test-Path $envFile) -and (-not $Password)) {
+      $rawExisting = [System.IO.File]::ReadAllText($envFile, $utf8NoBom).TrimStart([char]0xFEFF)
+      foreach ($line in ($rawExisting -split "\r?\n")) {
+        $trimmed = $line.Trim().TrimStart([char]0xFEFF)
+        if (-not $trimmed -or $trimmed.StartsWith("#")) { continue }
+        $idx = $trimmed.IndexOf("=")
+        if ($idx -le 0) { continue }
+        $k = $trimmed.Substring(0, $idx).Trim()
+        $v = $trimmed.Substring($idx + 1).Trim().Trim('"')
+        if ($v) { $existingMap[$k] = $v }
+      }
     }
+
+    $encodedPw = [System.Uri]::EscapeDataString($appPassword)
+    $dbUrlValue = if ($existingMap.ContainsKey("DATABASE_URL")) {
+      $existingMap["DATABASE_URL"]
+    } else {
+      "postgresql://erp_app:$encodedPw@127.0.0.1:$Port/erp_kayan?schema=public"
+    }
+    $adminDbUrlValue = if ($existingMap.ContainsKey("ADMIN_DATABASE_URL")) {
+      $existingMap["ADMIN_DATABASE_URL"]
+    } else {
+      "postgresql://postgres@127.0.0.1:$Port/postgres"
+    }
+    $jwtAccessSecret = if ($existingMap.ContainsKey("JWT_ACCESS_SECRET")) {
+      $existingMap["JWT_ACCESS_SECRET"]
+    } elseif ($existingMap.ContainsKey("JWT_SECRET")) {
+      $existingMap["JWT_SECRET"]
+    } else {
+      New-RandomSecret 32
+    }
+    $jwtRefreshSecret = if ($existingMap.ContainsKey("JWT_REFRESH_SECRET")) {
+      $existingMap["JWT_REFRESH_SECRET"]
+    } else {
+      New-RandomSecret 32
+    }
+    $corsOrigins = if ($existingMap.ContainsKey("CORS_ORIGINS")) {
+      $existingMap["CORS_ORIGINS"]
+    } elseif ($existingMap.ContainsKey("CORS_ORIGIN")) {
+      $existingMap["CORS_ORIGIN"]
+    } else {
+      "http://localhost:3000,http://127.0.0.1:3000,lan"
+    }
+
+    $envContent = @(
+      "# Managed by KAYAN ERP service installer",
+      "HOST=0.0.0.0",
+      "PORT=3000",
+      "NODE_ENV=production",
+      "DATABASE_URL=$dbUrlValue",
+      "ADMIN_DATABASE_URL=$adminDbUrlValue",
+      "JWT_ACCESS_SECRET=$jwtAccessSecret",
+      "JWT_SECRET=$jwtAccessSecret",
+      "JWT_REFRESH_SECRET=$jwtRefreshSecret",
+      "JWT_ACCESS_TTL=900",
+      "JWT_REFRESH_TTL=1209600",
+      "CORS_ORIGINS=$corsOrigins"
+    ) -join "`r`n"
+    [System.IO.File]::WriteAllText($envFile, ($envContent + "`r`n"), $utf8NoBom)
 
     $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
     $sid = ([System.Security.Principal.NTAccount]$currentUser).Translate([System.Security.Principal.SecurityIdentifier]).Value
-    & icacls.exe $envFile /inheritance:r /grant:r "*$($sid):(R)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+    & icacls.exe $envFile /inheritance:r /grant:r "*$($sid):(R)" "*S-1-5-32-545:(R)" "*S-1-5-11:(R)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
 
     Write-Output "SERVICE_STATUS=Running"
     Write-Output "PORT=$Port"

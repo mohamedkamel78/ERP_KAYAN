@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 
+import '../backend/local_backend.dart';
 import '../config/app_config.dart';
 import '../error/failure.dart';
 import '../logging/app_logger.dart';
@@ -37,6 +38,15 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
+          final localBaseUrl = LocalBackend.instance?.baseUrl;
+          if (localBaseUrl != null &&
+              localBaseUrl.isNotEmpty &&
+              options.baseUrl != localBaseUrl &&
+              (options.baseUrl == 'http://localhost:3000/api/v1' ||
+                  options.baseUrl == 'http://127.0.0.1:3000/api/v1')) {
+            _dio.options.baseUrl = localBaseUrl;
+            options.baseUrl = localBaseUrl;
+          }
           final token = await _tokenStore.readAccessToken();
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
@@ -103,7 +113,9 @@ class ApiClient {
   /// 403 means "you may not": renewing the session will not change that, and
   /// trying would only add a delay before the same answer.
   bool _isSessionRefusal(DioException e) =>
-      e.response?.statusCode == 401 && e.requestOptions.path != _refreshPath;
+      e.response?.statusCode == 401 &&
+      e.requestOptions.path != _refreshPath &&
+      e.requestOptions.path != '/auth/login';
 
   RequestOptions _authorised(RequestOptions options) {
     // The interceptor runs again for the retry and would attach the old
@@ -197,11 +209,19 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
   }) async {
-    final Response<dynamic> response;
+    Response<dynamic> response;
     try {
       response = await _dio.get<dynamic>(path, queryParameters: query);
     } on DioException catch (e) {
-      throw _mapDioException(e);
+      if (await _tryRecoverLocalBackend(e)) {
+        try {
+          response = await _dio.get<dynamic>(path, queryParameters: query);
+        } on DioException catch (retryError) {
+          throw _mapDioException(retryError);
+        }
+      } else {
+        throw _mapDioException(e);
+      }
     }
     final data = response.data;
     final raw = data is Map && data['items'] is List
@@ -220,11 +240,19 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
   }) async {
-    final Response<dynamic> response;
+    Response<dynamic> response;
     try {
       response = await _dio.get<dynamic>(path, queryParameters: query);
     } on DioException catch (e) {
-      throw _mapDioException(e);
+      if (await _tryRecoverLocalBackend(e)) {
+        try {
+          response = await _dio.get<dynamic>(path, queryParameters: query);
+        } on DioException catch (retryError) {
+          throw _mapDioException(retryError);
+        }
+      } else {
+        throw _mapDioException(e);
+      }
     }
     final data = response.data;
     if (data is Map) return Map<String, dynamic>.from(data);
@@ -241,12 +269,40 @@ class ApiClient {
       if (data == null) return <String, dynamic>{};
       return <String, dynamic>{'data': data};
     } on DioException catch (e) {
+      if (await _tryRecoverLocalBackend(e)) {
+        try {
+          final response = await request();
+          final data = response.data;
+          if (data is Map<String, dynamic>) return data;
+          if (data == null) return <String, dynamic>{};
+          return <String, dynamic>{'data': data};
+        } on DioException catch (retryError) {
+          throw _mapDioException(retryError);
+        }
+      }
       throw _mapDioException(e);
     } on Failure {
       rethrow;
     } catch (e) {
       throw ServerFailure('Unexpected client error', e);
     }
+  }
+
+  Future<bool> _tryRecoverLocalBackend(DioException e) async {
+    if (LocalBackend.instance == null) return false;
+    final isConnectionFailure =
+        e.type == DioExceptionType.connectionError ||
+        e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.unknown;
+    if (!isConnectionFailure) return false;
+    final status = await LocalBackend.ensureRunning(
+      appDisplayName: 'KAYAN ERP',
+    );
+    if (status.isReady && status.baseUrl != null && status.baseUrl!.isNotEmpty) {
+      _dio.options.baseUrl = status.baseUrl!;
+      return true;
+    }
+    return false;
   }
 
   Failure _mapDioException(DioException e) {

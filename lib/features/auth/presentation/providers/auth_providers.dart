@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/backend/local_backend.dart';
 import '../../../../core/config/app_config.dart';
 import '../../../../core/network/api_client.dart';
 import '../../../../core/result/result.dart';
@@ -11,9 +12,13 @@ import '../../domain/repositories/auth_repository.dart';
 import '../../domain/usecases/sign_in_usecase.dart';
 
 /// Composition root for the authentication feature.
-final appConfigProvider = Provider<AppConfig>(
-  (ref) => AppConfig.fromEnvironment(),
-);
+final appConfigProvider = Provider<AppConfig>((ref) {
+  final localBaseUrl = LocalBackend.instance?.baseUrl;
+  if (localBaseUrl != null && localBaseUrl.isNotEmpty) {
+    return AppConfig.forLocalServer(localBaseUrl);
+  }
+  return AppConfig.fromEnvironment();
+});
 
 final tokenStoreProvider = Provider<TokenStore>((ref) => TokenStore());
 

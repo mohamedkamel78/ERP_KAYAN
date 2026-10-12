@@ -133,6 +133,43 @@ class KayanDatabaseConfig {
   }
 }
 
+/// Ensures loopback HTTP traffic (`127.0.0.1`, `localhost`, `::1`) never goes
+/// through a system/environment HTTP proxy (VPN, Fiddler, corporate proxy),
+/// which would otherwise cause Dio and health probes to fail with a connection
+/// error against the local desktop server.
+class _LoopbackDirectHttpOverrides extends HttpOverrides {
+  _LoopbackDirectHttpOverrides(this._previous);
+
+  final HttpOverrides? _previous;
+
+  static bool _isLoopback(Uri uri) {
+    final host = uri.host.toLowerCase();
+    return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+  }
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    final client = _previous != null
+        ? _previous.createHttpClient(context)
+        : super.createHttpClient(context);
+    client.findProxy = (Uri uri) {
+      if (_isLoopback(uri)) return 'DIRECT';
+      return _previous != null
+          ? _previous.findProxyFromEnvironment(uri, null)
+          : HttpClient.findProxyFromEnvironment(uri);
+    };
+    return client;
+  }
+
+  @override
+  String findProxyFromEnvironment(Uri url, Map<String, String>? environment) {
+    if (_isLoopback(url)) return 'DIRECT';
+    return _previous != null
+        ? _previous.findProxyFromEnvironment(url, environment)
+        : super.findProxyFromEnvironment(url, environment);
+  }
+}
+
 /// The temporary logo file for the current preparation call, if any. Written
 /// just before the child process runs and cleared right after.
 File? _logoFile;
@@ -180,11 +217,18 @@ class LocalBackend {
   static Future<LocalBackendStatus> _ensureRunning(
     String appDisplayName,
   ) async {
+    if (HttpOverrides.current is! _LoopbackDirectHttpOverrides) {
+      HttpOverrides.global = _LoopbackDirectHttpOverrides(
+        HttpOverrides.current,
+      );
+    }
+
     // 1. Is a KAYAN API already answering? Then this copy does not need to
     //    start a second one, which is what keeps two windows of the program
     //    from fighting over the database.
     for (final port in candidatePorts) {
-      if (await _isKayanApi(port)) {
+      final probe = await _probeHealth(port);
+      if (probe.isHealthy && !probe.needsSetup) {
         // The address we already started on. Keep the handle to the child:
         // replacing it here would lose the only reference to the server and
         // leave it running after the window closes.
@@ -220,6 +264,8 @@ class LocalBackend {
     log.writeln('[shell] node: ${layout.nodeExecutable}');
     log.writeln('[shell] server: ${layout.entryPoint}');
     final settings = await RuntimeSettings.load(layout, port);
+
+    await _ensurePostgresReady(settings, log);
 
     // 2. Prepare the database first. On a machine that has never run the
     //    program this creates the database and applies the schema; on any
@@ -294,6 +340,57 @@ class LocalBackend {
     );
   }
 
+  static Future<void> _ensurePostgresReady(
+    RuntimeSettings settings,
+    IOSink log,
+  ) async {
+    if (!Platform.isWindows) return;
+    final dbUrl = settings.databaseUrl;
+    if (!KayanDatabaseConfig.isLocalDatabaseUrl(dbUrl)) return;
+    final uri = Uri.tryParse(dbUrl ?? '');
+    final dbPort = (uri != null && uri.hasPort && uri.port > 0)
+        ? uri.port
+        : KayanDatabaseConfig.port;
+
+    if (await _canConnectTcp(KayanDatabaseConfig.host, dbPort)) return;
+
+    log.writeln(
+      '[shell] PostgreSQL is not yet accepting connections on '
+      '${KayanDatabaseConfig.host}:$dbPort; checking KAYAN_PostgreSQL service',
+    );
+    try {
+      await Process.run('sc.exe', ['start', 'KAYAN_PostgreSQL']);
+    } catch (_) {}
+
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (DateTime.now().isBefore(deadline)) {
+      if (await _canConnectTcp(KayanDatabaseConfig.host, dbPort)) {
+        log.writeln(
+          '[shell] PostgreSQL is accepting connections on '
+          '${KayanDatabaseConfig.host}:$dbPort',
+        );
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
+  static Future<bool> _canConnectTcp(String host, int port) async {
+    Socket? socket;
+    try {
+      socket = await Socket.connect(
+        host,
+        port,
+        timeout: const Duration(seconds: 2),
+      );
+      return true;
+    } on Object {
+      return false;
+    } finally {
+      socket?.destroy();
+    }
+  }
+
   static bool _isDatabaseAuthenticationFailure(String text) =>
       text.contains('P1000') ||
       text.toLowerCase().contains('password authentication failed');
@@ -305,12 +402,16 @@ class LocalBackend {
       text.contains('P1001') ||
       text.contains('ECONNREFUSED');
 
-  /// True when something at this port answers the health route the way this
-  /// program's own API does.
-  static Future<bool> _isKayanApi(int port) async {
+  /// Probes `/api/v1/health` and verifies that the responder is a healthy
+  /// KAYAN ERP API (`status == 'ok'`, `database == 'up'`, `needsSetup` boolean).
+  static Future<({bool isHealthy, bool needsSetup})> _probeHealth(
+    int port,
+  ) async {
+    HttpClient? client;
     try {
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 2);
+      client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 2)
+        ..findProxy = (_) => 'DIRECT';
       final request = await client
           .getUrl(Uri.parse('http://127.0.0.1:$port/api/v1/health'))
           .timeout(const Duration(seconds: 3));
@@ -318,25 +419,59 @@ class LocalBackend {
         const Duration(seconds: 3),
       );
       final body = await response.transform(utf8.decoder).join();
-      client.close(force: true);
-      return response.statusCode == 200 && body.contains('"status"');
+      if (response.statusCode != 200) {
+        return (isHealthy: false, needsSetup: false);
+      }
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) {
+        return (isHealthy: false, needsSetup: false);
+      }
+      final isOk =
+          decoded['status'] == 'ok' &&
+          decoded['database'] == 'up' &&
+          decoded['needsSetup'] is bool;
+      if (!isOk) {
+        return (isHealthy: false, needsSetup: false);
+      }
+      return (
+        isHealthy: true,
+        needsSetup: decoded['needsSetup'] == true,
+      );
     } on Object {
-      return false;
+      return (isHealthy: false, needsSetup: false);
+    } finally {
+      client?.close(force: true);
     }
+  }
+
+  /// True when something at this port answers the health route the way this
+  /// program's own API does with `status=ok` and `database=up`.
+  static Future<bool> _isKayanApi(int port) async {
+    final probe = await _probeHealth(port);
+    return probe.isHealthy;
   }
 
   /// A port nothing is listening on, so two programs never share one.
   static Future<int?> _firstFreePort() async {
     for (final port in candidatePorts) {
+      ServerSocket? anyProbe;
+      ServerSocket? loopbackProbe;
       try {
-        final probe = await ServerSocket.bind(
+        anyProbe = await ServerSocket.bind(InternetAddress.anyIPv4, port);
+        await anyProbe.close();
+        anyProbe = null;
+        loopbackProbe = await ServerSocket.bind(
           InternetAddress.loopbackIPv4,
           port,
         );
-        await probe.close();
+        await loopbackProbe.close();
+        loopbackProbe = null;
         return port;
       } on SocketException {
         continue;
+      } finally {
+        await anyProbe?.close();
+        await loopbackProbe?.close();
       }
     }
     return null;
@@ -850,15 +985,36 @@ class RuntimeSettings {
         'postgresql://postgres@127.0.0.1:5433/postgres',
   };
 
+  static String _randomSecret() {
+    final random = Random.secure();
+    return base64Url.encode(List<int>.generate(48, (_) => random.nextInt(256)));
+  }
+
   static Future<RuntimeSettings> load(BackendLayout layout, int port) async {
-    final file = layout.settingsFile;
-    if (!await file.exists()) {
-      await file.parent.create(recursive: true);
-      await file.writeAsString(_firstRunFile());
+    var file = layout.settingsFile;
+    String rawContent;
+    try {
+      if (!await file.exists()) {
+        await file.parent.create(recursive: true);
+        await file.writeAsString(_firstRunFile());
+      }
+      rawContent = await file.readAsString();
+    } on FileSystemException {
+      // If a legacy ProgramData settings file has restrictive ACLs for the
+      // current Windows user, fall back to the user's APPDATA settings file.
+      file = File(
+        '${layout.dataDirectory.path}${Platform.pathSeparator}kayan.env',
+      );
+      if (!await file.exists()) {
+        await file.parent.create(recursive: true);
+        await file.writeAsString(_firstRunFile());
+      }
+      rawContent = await file.readAsString();
     }
+    final cleanContent = rawContent.replaceFirst('\uFEFF', '');
     final values = Map<String, String>.from(_defaults);
-    for (final line in (await file.readAsString()).split('\n')) {
-      final text = line.trim();
+    for (final line in cleanContent.split('\n')) {
+      final text = line.replaceFirst('\uFEFF', '').trim();
       if (text.isEmpty || text.startsWith('#')) continue;
       final index = text.indexOf('=');
       if (index <= 0) continue;
@@ -874,6 +1030,14 @@ class RuntimeSettings {
         values['JWT_SECRET'] != null &&
         values['JWT_SECRET']!.isNotEmpty) {
       values['JWT_ACCESS_SECRET'] = values['JWT_SECRET']!;
+    }
+    if (values['JWT_ACCESS_SECRET'] == null ||
+        values['JWT_ACCESS_SECRET']!.isEmpty) {
+      values['JWT_ACCESS_SECRET'] = _randomSecret();
+    }
+    if (values['JWT_REFRESH_SECRET'] == null ||
+        values['JWT_REFRESH_SECRET']!.isEmpty) {
+      values['JWT_REFRESH_SECRET'] = _randomSecret();
     }
     if ((values['CORS_ORIGINS'] == null || values['CORS_ORIGINS']!.isEmpty) &&
         values['CORS_ORIGIN'] != null &&
