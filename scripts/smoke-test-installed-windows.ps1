@@ -52,8 +52,14 @@ $node = Join-Path $backend "node\node.exe"
 if (-not (Test-Path $node)) { throw "The bundled Node runtime was not installed." }
 $api = $null
 try {
-  $prepare = Start-Process -FilePath $node -ArgumentList @("scripts\prepare-database.mjs") -WorkingDirectory $backend -Wait -PassThru -NoNewWindow
-  if ($prepare.ExitCode -ne 0) { throw ("Database preparation failed with exit code " + $prepare.ExitCode) }
+  $prepOut = Join-Path $env:TEMP "kayan-installer-prep-stdout.log"
+  $prepErr = Join-Path $env:TEMP "kayan-installer-prep-stderr.log"
+  $prepare = Start-Process -FilePath $node -ArgumentList @("scripts\prepare-database.mjs") -WorkingDirectory $backend -Wait -PassThru -NoNewWindow -RedirectStandardOutput $prepOut -RedirectStandardError $prepErr
+  if ($prepare.ExitCode -ne 0) {
+    $pOut = if (Test-Path $prepOut) { Get-Content $prepOut -Raw } else { "" }
+    $pErr = if (Test-Path $prepErr) { Get-Content $prepErr -Raw } else { "" }
+    throw ("Database preparation failed with exit code " + $prepare.ExitCode + [Environment]::NewLine + $pOut + [Environment]::NewLine + $pErr)
+  }
 
   $stdout = Join-Path $env:TEMP "kayan-installer-smoke-stdout.log"
   $stderr = Join-Path $env:TEMP "kayan-installer-smoke-stderr.log"

@@ -195,7 +195,7 @@ switch ($Action) {
     if (Test-Path $confFile) {
       $conf = [System.IO.File]::ReadAllText($confFile, $utf8NoBom)
       $conf = Set-PostgresConfOption -Content $conf -Key "port" -ValueLiteral "$Port"
-      $conf = Set-PostgresConfOption -Content $conf -Key "listen_addresses" -ValueLiteral "'127.0.0.1'"
+      $conf = Set-PostgresConfOption -Content $conf -Key "listen_addresses" -ValueLiteral "'localhost'"
       $conf = Set-PostgresConfOption -Content $conf -Key "logging_collector" -ValueLiteral "on"
       $conf = Set-PostgresConfOption -Content $conf -Key "log_directory" -ValueLiteral "'log'"
       $conf = Set-PostgresConfOption -Content $conf -Key "log_filename" -ValueLiteral "'postgresql.log'"
@@ -317,6 +317,6 @@ switch ($Action) {
     Write-Output "SERVICE_STATUS=Running"
     Write-Output "PORT=$Port"
     Write-Output "ENV_FILE=$envFile"
-    exit 0
+    return
   }
 }

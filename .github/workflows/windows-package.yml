@@ -131,7 +131,13 @@ jobs:
       - name: Install and smoke-test the actual setup and local server
         shell: pwsh
         run: |
-          & ./scripts/smoke-test-installed-windows.ps1 -SetupPath "build\desktop\KAYAN-Setup.exe"
+          try {
+            & ./scripts/smoke-test-installed-windows.ps1 -SetupPath "build\desktop\KAYAN-Setup.exe" *> build\smoke-log.txt
+          } finally {
+            if (Test-Path build\smoke-log.txt) {
+              Get-Content build\smoke-log.txt
+            }
+          }
       - name: Sign installer when a trusted certificate is configured
         shell: pwsh
         env:
@@ -185,8 +191,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          $logs = @("build\shape-log.txt", "build\build-log.txt", "build\verify-log.txt", "build\doctor.txt")
-          $tails = @{ "build\shape-log.txt" = 60; "build\build-log.txt" = 300; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
+          $logs = @("build\shape-log.txt", "build\build-log.txt", "build\smoke-log.txt", "build\verify-log.txt", "build\doctor.txt")
+          $tails = @{ "build\shape-log.txt" = 60; "build\build-log.txt" = 300; "build\smoke-log.txt" = 200; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
           $parts = @()
           foreach ($log in $logs) {
             if (Test-Path $log) {

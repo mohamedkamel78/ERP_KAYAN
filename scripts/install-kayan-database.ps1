@@ -88,26 +88,22 @@ if (Test-Path $errLogFile) {
 }
 
 Write-InstallLog "Provisioning KAYAN_PostgreSQL service and database on port $Port"
-$proc = Start-Process -FilePath "powershell.exe" `
-  -ArgumentList @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-File", $manageScript,
-    "-Action", "install",
-    "-Port", "$Port",
-    "-DataDir", $dataRoot,
-    "-PgBinDir", (Join-Path $pgRuntimeRoot "bin")
-  ) `
-  -Wait -PassThru -NoNewWindow `
-  -RedirectStandardOutput $logFile `
-  -RedirectStandardError $errLogFile
-
-if ($proc.ExitCode -ne 0) {
-  $stdoutTail = if (Test-Path $logFile) { (Get-Content $logFile -Tail 40) -join "`n" } else { "" }
-  $stderrTail = if (Test-Path $errLogFile) { (Get-Content $errLogFile -Tail 40) -join "`n" } else { "" }
+try {
+  # Invoke manage-kayan-db.ps1 directly in-process so paths with spaces
+  # (such as C:\Program Files\KAYAN ERP) are passed without Start-Process
+  # argument-splitting issues.
+  & $manageScript -Action install -Port $Port -DataDir $dataRoot -PgBinDir (Join-Path $pgRuntimeRoot "bin") 2>&1 |
+    ForEach-Object { Write-InstallLog "$_" }
+} catch {
+  $errText = $_.Exception.ToString()
+  Set-Content -Path $errLogFile -Value $errText -Encoding UTF8
   $pgLogFile = Join-Path $dataRoot "log\postgresql.log"
   $pgLogTail = if (Test-Path $pgLogFile) { (Get-Content $pgLogFile -Tail 40) -join "`n" } else { "" }
-  throw "KAYAN database setup failed with exit code $($proc.ExitCode). Logs: $logFile`nSTDOUT:`n$stdoutTail`nSTDERR:`n$stderrTail`nPG_LOG:`n$pgLogTail"
+  Write-InstallLog ("ERROR: " + $errText)
+  if ($pgLogTail) {
+    Write-InstallLog ("PG_LOG:`n" + $pgLogTail)
+  }
+  throw "KAYAN database setup failed. Logs: $logFile`nERROR:`n$errText`nPG_LOG:`n$pgLogTail"
 }
 
 $service = Get-Service -Name "KAYAN_PostgreSQL" -ErrorAction SilentlyContinue
