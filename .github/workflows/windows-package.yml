@@ -223,13 +223,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish them as a downloadable release (version tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish the verified KAYAN-Setup.exe to GitHub Release for direct download
+        if: success() && github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $ErrorActionPreference = "Stop"
+          $tag = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "${{ github.ref_name }}" } else { "v1.0.0" }
           $setup = Join-Path (Get-Location) "build\desktop\KAYAN-Setup.exe"
           if (-not (Test-Path $setup)) { throw "KAYAN-Setup.exe was not produced" }
           $files = @($setup)
@@ -242,19 +243,25 @@ jobs:
             Select-String -Pattern "Total size\s*:\s*(.+)$" | Select-Object -First 1).Matches[0].Groups[1].Value.Trim()
           $builtOn = (Get-Content build\doctor.txt |
             Select-String -Pattern "Flutter \(Channel stable, ([^,]+)" | Select-Object -First 1).Matches[0].Groups[1].Value
-          # Names come from the files themselves: a tag says v1.0.1 while the
-          # installer inside it is named for the version in its own definition.
           $setupName = "KAYAN-Setup.exe"
+          $setupSizeMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          $setupSha256 = (Get-FileHash -Path $setup -Algorithm SHA256).Hash
+          $sig = Get-AuthenticodeSignature -FilePath $setup
+          $sigStatus = "$($sig.Status)"
 
           $notes = @"
           KAYAN ERP for Windows, built from commit ${{ github.sha }}.
 
+          Direct Download
+          ---------------
+          https://github.com/${{ github.repository }}/releases/download/$tag/$setupName
+
           Install it
           ----------
-          Run $setupName. This release contains the installer only.
+          Run $setupName ($setupSizeMb MB, SHA-256: $setupSha256, Authenticode: $sigStatus). This release contains the single installer only.
 
           The program starts its own server: no terminal, no Node.js, no npm, no
-          Flutter and no commands. The installer provisions its dedicated local PostgreSQL instance.
+          Flutter and no commands. The installer provisions its dedicated local PostgreSQL instance (KAYAN_PostgreSQL on port 5433).
 
           On a machine where the database is still empty the program asks for the
           first administrator, and creates the company, its roles and its chart
@@ -270,18 +277,23 @@ jobs:
           $verdict.
           "@
 
-          # A tag is not the same thing as a release: deleting the release must
-          # leave the tag alone, or the create that follows has nothing to
-          # verify against. (--cleanup-tag deletes both, and the first run that
-          # replaced an existing release failed exactly there.)
-          gh release view $tag > $null 2>&1
+          $notesFile = Join-Path $env:TEMP "kayan-release-notes.txt"
+          Set-Content -Path $notesFile -Value $notes -Encoding UTF8
+
+          & gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release delete $tag --yes
-          }
-          gh release create $tag --verify-tag --title "KAYAN ERP $tag - Windows" --notes $notes @files
-          if ($LASTEXITCODE -ne 0) {
-            # Whatever stopped the create, the files are the point: try simply
-            # putting them on the release of that name.
-            gh release upload $tag @files --clobber
+            $oldAssets = (& gh release view $tag --json assets --jq ".assets[].name") 2>$null
+            foreach ($assetName in $oldAssets) {
+              if ($assetName -and $assetName -ne $setupName) {
+                Write-Host "Removing legacy release asset: $assetName"
+                & gh release delete-asset $tag $assetName --yes
+              }
+            }
+            & gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "could not upload $setupName to release $tag" }
+            & gh release edit $tag --title "KAYAN ERP $tag - Windows" --notes-file $notesFile
+          } else {
+            & gh release create $tag --title "KAYAN ERP $tag - Windows" --notes-file $notesFile @files
             if ($LASTEXITCODE -ne 0) { throw "could not publish the package" }
           }
+          Write-Host "::notice title=KAYAN-Setup.exe Published::Direct URL: https://github.com/${{ github.repository }}/releases/download/$tag/$setupName | Commit: ${{ github.sha }} | Size: $setupSizeMb MB | SHA256: $setupSha256 | Authenticode: $sigStatus"

@@ -185,6 +185,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     if (!mounted) return;
     setState(() {
       _remember = false;
+      _username.clear();
       _password.clear();
     });
     ScaffoldMessenger.of(context).showSnackBar(
@@ -338,7 +339,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ],
                           ),
                           TextButton.icon(
-                            onPressed: _busy ? _clearSaved : null,
+                            onPressed: _busy ? null : _clearSaved,
                             icon: const Icon(Icons.clear_all, size: 18),
                             label: Text(l10n.clearSavedCredentials),
                           ),

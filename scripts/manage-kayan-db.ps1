@@ -1,317 +1,322 @@
-<#
-.SYNOPSIS
-  Manages the dedicated KAYAN PostgreSQL database instance on Windows.
-  Ensures clean, zero-configuration setup without conflicting with other
-  PostgreSQL instances.
-
-.DESCRIPTION
-  Actions:
-    install    Initializes pgdata (if needed), registers Windows Service
-               'KAYAN_PostgreSQL' on port 5433, starts it, provisions
-               erp_app role & erp_kayan database, writes kayan.env.
-    start      Starts the KAYAN_PostgreSQL service or daemon.
-    stop       Stops the KAYAN_PostgreSQL service or daemon.
-    status     Checks service status and TCP port 5433 liveness.
-    uninstall  Stops and unregisters the service, PRESERVING data in pgdata.
-    purge      Deletes pgdata (only when -Force is explicitly specified).
-
-.EXAMPLE
-  powershell -ExecutionPolicy Bypass -File scripts\manage-kayan-db.ps1 -Action install
-#>
+# Dedicated PostgreSQL service manager for KAYAN ERP on Windows.
+#
+# Creates and manages an isolated PostgreSQL cluster and Windows service
+# (`KAYAN_PostgreSQL`) on port 5433 so KAYAN ERP does not collide with any
+# developer or third-party PostgreSQL installation on port 5432.
+#
+# Usage (Administrator PowerShell):
+#   powershell -ExecutionPolicy Bypass -File scripts\manage-kayan-db.ps1 -Action install
+#   powershell -ExecutionPolicy Bypass -File scripts\manage-kayan-db.ps1 -Action status
+#   powershell -ExecutionPolicy Bypass -File scripts\manage-kayan-db.ps1 -Action start
+#   powershell -ExecutionPolicy Bypass -File scripts\manage-kayan-db.ps1 -Action stop
 
 [CmdletBinding()]
 param(
-  [ValidateSet('install', 'start', 'stop', 'status', 'uninstall', 'purge')]
-  [string]$Action = 'status',
-  [string]$Port = '5433',
-  [string]$ServiceName = 'KAYAN_PostgreSQL',
-  [string]$DataDir = '',
-  [string]$PgBinDir = '',
-  [string]$AppPassword = '',
-  [string]$PostgresPassword = '',
-  [switch]$Force
+  [ValidateSet("install", "start", "stop", "restart", "status", "uninstall")]
+  [string]$Action = "status",
+  [string]$ServiceName = "KAYAN_PostgreSQL",
+  [int]$Port = 5433,
+  [string]$DataDir = "",
+  [string]$PgBinDir = "",
+  [string]$Password = ""
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = "Stop"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-function Get-KayanDataDir {
-  if ($DataDir -and $DataDir.Trim().Length -gt 0) { return $DataDir }
-  if ($env:ProgramData) {
-    return Join-Path $env:ProgramData "KAYAN-ERP\pgdata"
-  }
-  return Join-Path $env:LOCALAPPDATA "KAYAN-ERP\pgdata"
-}
+function Find-PgBinDir([string]$Explicit) {
+  $candidates = @()
+  if ($Explicit) { $candidates += $Explicit }
+  if ($env:KAYAN_PG_BIN_DIR) { $candidates += $env:KAYAN_PG_BIN_DIR }
 
-function Find-PgBin {
-  if ($PgBinDir -and (Test-Path (Join-Path $PgBinDir "initdb.exe"))) {
-    return $PgBinDir
-  }
+  $programDataPg = Join-Path $env:ProgramData "KAYAN-ERP\pgsql"
+  $candidates += (Join-Path $programDataPg "bin")
+  $candidates += $programDataPg
 
-  $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-  $root = Split-Path -Parent $scriptDir
+  $scriptParent = Split-Path -Parent $PSScriptRoot
+  $candidates += (Join-Path $scriptParent "pg\bin")
+  $candidates += (Join-Path $scriptParent "pg")
+  $candidates += (Join-Path $scriptParent "backend\pg\bin")
+  $candidates += (Join-Path $scriptParent "backend\pg")
 
-  $candidates = @(
-    (Join-Path $env:ProgramData "KAYAN-ERP\pgsql\bin"),
-    (Join-Path $root "backend\pg\bin"),
-    (Join-Path $root "backend\pg"),
-    (Join-Path $root "backend\pgsql\bin"),
-    "${env:LOCALAPPDATA}\kayan-tools\pgsql\bin",
-    "${env:ProgramFiles}\KAYAN ERP\backend\pg\bin",
-    "${env:ProgramFiles}\KAYAN ERP\backend\pg",
-    "${env:ProgramFiles(x86)}\KAYAN ERP\backend\pg\bin",
-    "${env:ProgramFiles(x86)}\KAYAN ERP\backend\pg"
-  )
-
-  # Check standard PostgreSQL installs as secondary fallback
-  foreach ($ver in 18..14) {
-    $candidates += "${env:ProgramFiles}\PostgreSQL\$ver\bin"
-    $candidates += "${env:ProgramFiles(x86)}\PostgreSQL\$ver\bin"
+  foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if (-not $base) { continue }
+    $pgRoot = Join-Path $base "PostgreSQL"
+    if (Test-Path $pgRoot) {
+      Get-ChildItem $pgRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object { $candidates += (Join-Path $_.FullName "bin") }
+    }
   }
 
   foreach ($dir in $candidates) {
-    if ($dir -and (Test-Path (Join-Path $dir "initdb.exe")) -and (Test-Path (Join-Path $dir "pg_ctl.exe"))) {
-      return $dir
+    if ($dir -and
+        (Test-Path (Join-Path $dir "pg_ctl.exe")) -and
+        (Test-Path (Join-Path $dir "initdb.exe")) -and
+        (Test-Path (Join-Path $dir "postgres.exe"))) {
+      return (Resolve-Path $dir).Path
     }
   }
 
-  # Last resort: on PATH
-  $cmd = Get-Command "initdb.exe" -ErrorAction SilentlyContinue
-  if ($cmd) { return Split-Path -Parent $cmd.Source }
-
+  $onPath = Get-Command pg_ctl.exe -ErrorAction SilentlyContinue
+  if ($onPath) { return (Split-Path -Parent $onPath.Source) }
   return $null
 }
 
-function Test-PortListening([int]$p) {
-  try {
-    $client = [System.Net.Sockets.TcpClient]::new()
-    $async = $client.BeginConnect("127.0.0.1", $p, $null, $null)
-    $ok = $async.AsyncWaitHandle.WaitOne(1000)
-    if ($ok -and $client.Connected) {
-      $client.EndConnect($async)
-      $client.Close()
-      return $true
-    }
-    $client.Close()
-    return $false
-  } catch {
-    return $false
+function Get-DefaultDataDir {
+  $base = Join-Path $env:ProgramData "KAYAN-ERP"
+  return (Join-Path $base "pgdata")
+}
+
+function Get-KayanEnvPath {
+  $base = Join-Path $env:ProgramData "KAYAN-ERP"
+  return (Join-Path $base "kayan.env")
+}
+
+function New-RandomSecret([int]$ByteCount = 32) {
+  $bytes = New-Object byte[] $ByteCount
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  $rng.GetBytes($bytes)
+  $rng.Dispose()
+  return ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLowerInvariant()
+}
+
+function Set-PostgresConfOption([string]$Content, [string]$Key, [string]$ValueLiteral) {
+  $pattern = "(?m)^[#\s]*$([regex]::Escape($Key))\s*=.*$"
+  $line = "$Key = $ValueLiteral"
+  if ($Content -match $pattern) {
+    return ([regex]::Replace($Content, $pattern, $line))
+  }
+  return ($Content.TrimEnd() + "`r`n" + $line + "`r`n")
+}
+
+function Grant-PostgresClusterPermissions([string]$PgRootDir, [string]$ClusterDir) {
+  if ($PgRootDir -and (Test-Path $PgRootDir)) {
+    & icacls.exe $PgRootDir /grant "*S-1-5-20:(OI)(CI)(RX)" "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" /T /C | Out-Null
+  }
+  if ($ClusterDir -and (Test-Path $ClusterDir)) {
+    & icacls.exe $ClusterDir /grant "*S-1-5-20:(OI)(CI)(F)" "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" /T /C | Out-Null
   }
 }
 
-$pgDir = Find-PgBin
-$targetDataDir = Get-KayanDataDir
-if (-not $PostgresPassword -and $env:KAYAN_POSTGRES_ADMIN_PASSWORD) { $PostgresPassword = $env:KAYAN_POSTGRES_ADMIN_PASSWORD }
-$script:KayanPostgresConfigChanged = $false
-
-switch ($Action) {
-  'status' {
-    Write-Host "KAYAN Database Status Check (Port $Port)" -ForegroundColor Cyan
-    $listening = Test-PortListening ([int]$Port)
-    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($svc) {
-      Write-Host "  Service '$ServiceName': $($svc.Status)"
-    } else {
-      Write-Host "  Service '$ServiceName': Not registered"
-    }
-    if ($listening) {
-      Write-Host "  TCP Port $Port : LISTENING (Ready)" -ForegroundColor Green
-      exit 0
-    } else {
-      Write-Host "  TCP Port $Port : Not listening" -ForegroundColor Yellow
-      exit 1
+function Get-ExistingDatabasePassword([string]$EnvFile) {
+  if (-not (Test-Path $EnvFile)) { return $null }
+  foreach ($line in (Get-Content -Path $EnvFile -ErrorAction SilentlyContinue)) {
+    $trimmed = $line.Trim()
+    if ($trimmed.StartsWith("#") -or -not $trimmed.StartsWith("DATABASE_URL=")) { continue }
+    $url = $trimmed.Substring("DATABASE_URL=".Length).Trim()
+    if ($url -match "^postgresql://[^:]+:([^@]+)@") {
+      return [System.Uri]::UnescapeDataString($Matches[1])
     }
   }
+  return $null
+}
 
-  'install' {
-    Write-Host "=== Setting up Dedicated KAYAN PostgreSQL Instance ===" -ForegroundColor Cyan
-    if (-not $pgDir) {
-      Write-Error "PostgreSQL tools (initdb.exe, pg_ctl.exe) not found. Run installer or scripts\install-postgres-portable.bat."
-      exit 1
-    }
-    Write-Host "  Using PostgreSQL binaries from: $pgDir"
-    Write-Host "  Target data directory: $targetDataDir"
-    Write-Host "  Dedicated port: $Port"
+$targetDataDir = if ($DataDir) { $DataDir } else { Get-DefaultDataDir }
 
-    $initDb = Join-Path $pgDir "initdb.exe"
-    $pgCtl = Join-Path $pgDir "pg_ctl.exe"
-    $psql = Join-Path $pgDir "psql.exe"
-
-    # 1. Initialize data cluster if not present
-    $versionFile = Join-Path $targetDataDir "PG_VERSION"
-    if (-not (Test-Path $versionFile)) {
-      Write-Host "  Initializing new database cluster in $targetDataDir..." -ForegroundColor Cyan
-      New-Item -ItemType Directory -Force -Path $targetDataDir | Out-Null
-
-      $shareDir = Join-Path (Split-Path -Parent $pgDir) "share"
-      if (-not (Test-Path $shareDir)) {
-        $shareDir = Join-Path $pgDir "share"
-      }
-
-      $initArgs = @("-D", $targetDataDir, "-U", "postgres", "-A", "trust", "-E", "UTF8", "--locale=C")
-      if (Test-Path $shareDir) {
-        $initArgs += @("-L", $shareDir)
-      }
-
-      & $initDb @initArgs
-      if ($LASTEXITCODE -ne 0) {
-        Write-Error "initdb failed with exit code $LASTEXITCODE."
-        exit 1
-      }
-      Write-Host "  [OK] Database cluster initialized." -ForegroundColor Green
-    } else {
-      Write-Host "  [OK] Existing database cluster found, preserving all data." -ForegroundColor Green
-    }
-
-    # 2. Configure port in postgresql.conf
-    $confFile = Join-Path $targetDataDir "postgresql.conf"
-    if (Test-Path $confFile) {
-      $conf = Get-Content $confFile -Raw
-      $beforeConfig = $conf
-      $conf = [regex]::Replace($conf, '(?m)^[ \t]*#?[ \t]*port[ \t]*=[^\r\n]*$', "port = $Port")
-      if ($conf -notmatch '(?m)^[ \t]*port[ \t]*=') { $conf += [Environment]::NewLine + "port = $Port" + [Environment]::NewLine }
-      # Keep PostgreSQL loopback-only; clients must reach the API, not the DB directly.
-      $conf = [regex]::Replace($conf, "(?m)^[ \t]*#?[ \t]*listen_addresses[ \t]*=[^\r\n]*$", "listen_addresses = '127.0.0.1'")
-      if ($conf -notmatch "(?m)^[ \t]*listen_addresses[ \t]*=") { $conf += [Environment]::NewLine + "listen_addresses = '127.0.0.1'" + [Environment]::NewLine }
-      if ($conf -ne $beforeConfig) { $script:KayanPostgresConfigChanged = $true }
-      Set-Content -Path $confFile -Value $conf -Encoding UTF8
-    }
-
-    # 3. Register and start a persistent Windows service. A background pg_ctl
-    # process is not sufficient: it would disappear on reboot.
+switch ($Action) {
+  "status" {
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if (-not $svc) {
-      Write-Host "  Registering Windows Service '$ServiceName' on port $Port..." -ForegroundColor Cyan
-      & $pgCtl register -N $ServiceName -D $targetDataDir -o "-p $Port" -S auto
-      $registerExitCode = $LASTEXITCODE
-      $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-      if (-not $svc) {
-        Write-Host "  pg_ctl register returned $registerExitCode; using New-Service fallback." -ForegroundColor Yellow
-        $serviceCommand = '"' + $pgCtl + '" runservice -N "' + $ServiceName + '" -D "' + $targetDataDir + '" -o "-p ' + $Port + '"'
-        New-Service -Name $ServiceName -DisplayName "KAYAN ERP PostgreSQL" -Description "Dedicated local PostgreSQL database for KAYAN ERP." -BinaryPathName $serviceCommand -StartupType Automatic | Out-Null
-        $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-      }
+      Write-Output "SERVICE_STATUS=NOT_INSTALLED"
+      exit 3
     }
-    if (-not $svc) { throw "Could not register the persistent Windows service '$ServiceName'." }
-    Set-Service -Name $ServiceName -StartupType Automatic
-    if ($svc.Status -ne "Running") { Start-Service -Name $ServiceName -ErrorAction Stop }
-    $attempts = 0
-    while (-not (Test-PortListening ([int]$Port)) -and $attempts -lt 30) {
-      Start-Sleep -Seconds 1
-      $attempts++
-    }
-    if (-not (Test-PortListening ([int]$Port))) { throw "Windows service '$ServiceName' did not start PostgreSQL on port $Port." }
-    Write-Host "  [OK] Persistent service '$ServiceName' is running on 127.0.0.1:$Port." -ForegroundColor Green
-
-    # 4. Provision erp_app role and erp_kayan database
-    if (-not $AppPassword) {
-      $AppPassword = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 28 | ForEach-Object {[char]$_})
-    }
-
-    $escapedPw = $AppPassword.Replace("'", "''")
-    if ($PostgresPassword) { $env:PGPASSWORD = $PostgresPassword }
-    $checkRole = & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -t -A -c "SELECT 1 FROM pg_roles WHERE rolname='erp_app';" 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Cannot authenticate to the PostgreSQL administrator account. Existing data was not changed." }
-    if ("$checkRole" -match "1") {
-      & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -c "ALTER ROLE erp_app WITH LOGIN CREATEDB PASSWORD '$escapedPw';" | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw "Could not configure the erp_app database role." }
-      Write-Host "  [OK] Synchronized password for existing role 'erp_app'." -ForegroundColor Green
-    } else {
-      & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -c "CREATE ROLE erp_app WITH LOGIN CREATEDB PASSWORD '$escapedPw';" | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw "Could not create the erp_app database role." }
-      Write-Host "  [OK] Created database role 'erp_app'." -ForegroundColor Green
-    }
-
-    $checkDb = & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -t -A -c "SELECT 1 FROM pg_database WHERE datname='erp_kayan';" 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Could not verify the erp_kayan database." }
-    if ("$checkDb" -notmatch "1") {
-      & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -c "CREATE DATABASE erp_kayan OWNER erp_app;" | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw "Could not create the erp_kayan database." }
-      Write-Host "  [OK] Created database 'erp_kayan'." -ForegroundColor Green
-    } else {
-      Write-Host "  [OK] Existing database 'erp_kayan' verified (data preserved)." -ForegroundColor Green
-    }
-
-    # 5. Persist settings in the machine configuration directory.
-    # The installer runs elevated, while the app is launched as the normal
-    # user. ProgramData gives both processes one stable path; lock the file
-    # down to the installing user's SID, SYSTEM and local Administrators.
-    $kayanDir = Join-Path $env:ProgramData "KAYAN-ERP"
-    New-Item -ItemType Directory -Force -Path $kayanDir | Out-Null
-    $envFile = Join-Path $kayanDir "kayan.env"
-
-    $jwtAccess = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 48 | ForEach-Object {[char]$_})
-    $jwtRefresh = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 48 | ForEach-Object {[char]$_})
-
-    $envContent = @"
-# KAYAN ERP - Application Runtime Configuration
-# Generated automatically by KAYAN Setup.
-
-HOST="0.0.0.0"
-PORT=3000
-DATABASE_URL="postgresql://erp_app:$AppPassword@127.0.0.1:$Port/erp_kayan?schema=public"
-ADMIN_DATABASE_URL="postgresql://postgres:$PostgresPassword@127.0.0.1:$Port/postgres"
-JWT_ACCESS_SECRET="$jwtAccess"
-JWT_REFRESH_SECRET="$jwtRefresh"
-JWT_ACCESS_TTL=900
-JWT_REFRESH_TTL=1209600
-"@
-    Set-Content -Path $envFile -Value $envContent -Encoding UTF8
-
-    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    & icacls.exe $envFile /inheritance:r /grant:r "*$($sid):(R)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      throw "Could not secure the KAYAN runtime configuration file ACL."
-    }
-    Write-Host "  [OK] Persisted protected runtime configuration to: $envFile" -ForegroundColor Green
-
-    Write-Host "`n=== Database setup finished successfully ===" -ForegroundColor Green
+    Write-Output ("SERVICE_NAME=" + $svc.Name)
+    Write-Output ("SERVICE_STATUS=" + $svc.Status)
+    Write-Output ("DATA_DIR=" + $targetDataDir)
     exit 0
   }
 
-  'start' {
-    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($svc) {
-      if ($svc.Status -ne 'Running') {
-        Start-Service -Name $ServiceName
-      }
-    } elseif ($pgDir -and (Test-Path $targetDataDir)) {
-      $pgCtl = Join-Path $pgDir "pg_ctl.exe"
-      & $pgCtl start -D $targetDataDir -o "-p $Port" -w -t 15
-    }
+  "start" {
+    Start-Service -Name $ServiceName
+    Write-Output "SERVICE_STATUS=Running"
+    exit 0
   }
 
-  'stop' {
-    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-    if ($svc) {
-      if ($svc.Status -ne 'Stopped') {
-        Stop-Service -Name $ServiceName -Force
-      }
-    } elseif ($pgDir -and (Test-Path $targetDataDir)) {
-      $pgCtl = Join-Path $pgDir "pg_ctl.exe"
-      & $pgCtl stop -D $targetDataDir -m fast
-    }
+  "stop" {
+    Stop-Service -Name $ServiceName -Force
+    Write-Output "SERVICE_STATUS=Stopped"
+    exit 0
   }
 
-  'uninstall' {
-    Write-Host "Stopping and unregistering service '$ServiceName'..."
+  "restart" {
+    Restart-Service -Name $ServiceName -Force
+    Write-Output "SERVICE_STATUS=Running"
+    exit 0
+  }
+
+  "uninstall" {
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($svc) {
-      try { Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue } catch {}
+      if ($svc.Status -ne "Stopped") {
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+      }
       & sc.exe delete $ServiceName | Out-Null
-      Write-Host "  [OK] Service unregistered."
     }
-    Write-Host "  Note: User data in $targetDataDir was PRESERVED." -ForegroundColor Green
+    Write-Output "SERVICE_STATUS=UNINSTALLED"
+    exit 0
   }
 
-  'purge' {
-    if (-not $Force) {
-      Write-Error "Purge requires -Force switch. This will permanently delete all company data in $targetDataDir."
-      exit 1
+  "install" {
+    $bin = Find-PgBinDir $PgBinDir
+    if (-not $bin) {
+      throw "PostgreSQL binaries (initdb.exe / pg_ctl.exe / postgres.exe) were not found."
     }
-    Write-Host "Purging data directory $targetDataDir..." -ForegroundColor Red
-    if (Test-Path $targetDataDir) {
-      Remove-Item -Recurse -Force $targetDataDir
-      Write-Host "  [OK] Data directory purged."
+
+    $initdb = Join-Path $bin "initdb.exe"
+    $pgCtl = Join-Path $bin "pg_ctl.exe"
+    $psql = Join-Path $bin "psql.exe"
+    $pgRoot = Split-Path -Parent $bin
+    $shareCandidates = @(
+      (Join-Path $pgRoot "share"),
+      (Join-Path $bin "share")
+    )
+    $shareDir = $shareCandidates | Where-Object { Test-Path (Join-Path $_ "postgres.bki") } | Select-Object -First 1
+    if (-not $shareDir) {
+      throw "PostgreSQL share directory (postgres.bki) was not found near $bin."
     }
+
+    $parentDir = Split-Path -Parent $targetDataDir
+    if (-not (Test-Path $parentDir)) {
+      New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    }
+
+    $pgVersionFile = Join-Path $targetDataDir "PG_VERSION"
+    if (-not (Test-Path $pgVersionFile)) {
+      New-Item -ItemType Directory -Force -Path $targetDataDir | Out-Null
+      Grant-PostgresClusterPermissions -PgRootDir $pgRoot -ClusterDir $targetDataDir
+      & $initdb -D $targetDataDir -U postgres -A trust -E UTF8 --locale=C -L $shareDir
+      if ($LASTEXITCODE -ne 0) {
+        throw "initdb failed with exit code $LASTEXITCODE"
+      }
+    }
+
+    $confFile = Join-Path $targetDataDir "postgresql.conf"
+    if (Test-Path $confFile) {
+      $conf = [System.IO.File]::ReadAllText($confFile, $utf8NoBom)
+      $conf = Set-PostgresConfOption -Content $conf -Key "port" -ValueLiteral "$Port"
+      $conf = Set-PostgresConfOption -Content $conf -Key "listen_addresses" -ValueLiteral "'127.0.0.1'"
+      $conf = Set-PostgresConfOption -Content $conf -Key "logging_collector" -ValueLiteral "on"
+      $conf = Set-PostgresConfOption -Content $conf -Key "log_directory" -ValueLiteral "'log'"
+      $conf = Set-PostgresConfOption -Content $conf -Key "log_filename" -ValueLiteral "'postgresql.log'"
+      # Always write postgresql.conf as UTF-8 WITHOUT BOM. PowerShell 5.1's
+      # Set-Content -Encoding UTF8 prepends 0xEF 0xBB 0xBF, which PostgreSQL
+      # rejects as a syntax error at line 1 during service startup.
+      [System.IO.File]::WriteAllText($confFile, $conf, $utf8NoBom)
+    }
+
+    $logDir = Join-Path $targetDataDir "log"
+    if (-not (Test-Path $logDir)) {
+      New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    }
+
+    # Grant NT AUTHORITY\NetworkService (S-1-5-20) and LocalSystem (S-1-5-18)
+    # access to both the PostgreSQL runtime and the pgdata directory AFTER
+    # initdb (which resets ACLs on pgdata to the current user only).
+    Grant-PostgresClusterPermissions -PgRootDir $pgRoot -ClusterDir $targetDataDir
+
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $svc) {
+      & $pgCtl register -N $ServiceName -D $targetDataDir -o "-p $Port" -S auto
+      if ($LASTEXITCODE -ne 0) {
+        $pgExe = Join-Path $bin "postgres.exe"
+        $binPath = "`"$pgExe`" -D `"$targetDataDir`" -p $Port"
+        New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName "KAYAN ERP PostgreSQL ($Port)" -StartupType Automatic | Out-Null
+      }
+    }
+
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $svc) {
+      throw "Service $ServiceName was not registered."
+    }
+
+    if ($svc.Status -ne "Running") {
+      try {
+        Start-Service -Name $ServiceName -ErrorAction Stop
+      } catch {
+        Write-Host "Default service account failed to start $ServiceName ($($_.Exception.Message)); configuring LocalSystem account..."
+        & sc.exe config $ServiceName obj= "LocalSystem" | Out-Null
+        Grant-PostgresClusterPermissions -PgRootDir $pgRoot -ClusterDir $targetDataDir
+        Start-Service -Name $ServiceName -ErrorAction Stop
+      }
+    }
+
+    $ready = $false
+    for ($i = 0; $i -lt 30; $i++) {
+      $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $Port -WarningAction SilentlyContinue
+      if ($check.TcpTestSucceeded) {
+        $ready = $true
+        break
+      }
+      Start-Sleep -Seconds 1
+    }
+    if (-not $ready) {
+      $pgLog = Join-Path $targetDataDir "log\postgresql.log"
+      $pgLogTail = if (Test-Path $pgLog) { (Get-Content $pgLog -Tail 40) -join "`n" } else { "No postgresql.log found" }
+      throw "Service $ServiceName started, but port $Port did not accept connections within 30 seconds.`n$pgLogTail"
+    }
+
+    $envFile = Get-KayanEnvPath
+    $existingPw = Get-ExistingDatabasePassword -EnvFile $envFile
+    $appPassword = if ($Password) {
+      $Password
+    } elseif ($existingPw) {
+      $existingPw
+    } else {
+      New-RandomSecret 24
+    }
+
+    if (Test-Path $psql) {
+      $escapedPw = $appPassword.Replace("'", "''")
+      $roleExists = (& $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'erp_app';") 2>$null
+      if ($LASTEXITCODE -ne 0) {
+        throw "psql failed to query roles on 127.0.0.1:$Port"
+      }
+      if (($roleExists | Out-String).Trim() -ne "1") {
+        & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE erp_app WITH LOGIN CREATEDB PASSWORD '$escapedPw';" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          throw "psql failed to create erp_app role on 127.0.0.1:$Port"
+        }
+      } else {
+        # Never automatically alter an existing erp_app role's password or
+        # overwrite existing database credentials.
+        Write-Host "Role erp_app already exists; preserving existing role password."
+      }
+
+      $exists = (& $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'erp_kayan';") 2>$null
+      if (($exists | Out-String).Trim() -ne "1") {
+        & $psql -h 127.0.0.1 -p $Port -U postgres -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE erp_kayan OWNER erp_app;" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          throw "psql failed to create database erp_kayan on 127.0.0.1:$Port"
+        }
+      }
+    }
+
+    # Only write kayan.env if it does not already exist (or if an explicit
+    # -Password override was supplied), so existing company installations keep
+    # their JWT secrets and database credentials intact across upgrades.
+    if ((-not (Test-Path $envFile)) -or $Password) {
+      $encodedPw = [System.Uri]::EscapeDataString($appPassword)
+      $jwtSecret = New-RandomSecret 32
+      $jwtRefreshSecret = New-RandomSecret 32
+      $envContent = @(
+        "# Managed by KAYAN ERP service installer",
+        "PORT=3000",
+        "DATABASE_URL=postgresql://erp_app:$encodedPw@127.0.0.1:$Port/erp_kayan?schema=public",
+        "JWT_SECRET=$jwtSecret",
+        "JWT_REFRESH_SECRET=$jwtRefreshSecret",
+        "CORS_ORIGIN=http://localhost:8080,http://127.0.0.1:8080,http://localhost:3000,http://127.0.0.1:3000,lan"
+      ) -join "`r`n"
+      [System.IO.File]::WriteAllText($envFile, ($envContent + "`r`n"), $utf8NoBom)
+    }
+
+    $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $sid = ([System.Security.Principal.NTAccount]$currentUser).Translate([System.Security.Principal.SecurityIdentifier]).Value
+    & icacls.exe $envFile /inheritance:r /grant:r "*$($sid):(R)" "*S-1-5-18:(F)" "*S-1-5-32-544:(F)" | Out-Null
+
+    Write-Output "SERVICE_STATUS=Running"
+    Write-Output "PORT=$Port"
+    Write-Output "ENV_FILE=$envFile"
+    exit 0
   }
 }

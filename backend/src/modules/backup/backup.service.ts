@@ -59,7 +59,7 @@ interface TableSpec {
 /// points at comes before it. Restoring in any other order breaks a foreign
 /// key, which is exactly what a half-restore looks like.
 const TABLES: TableSpec[] = [
-  { model: 'branch', scope: 'company' },
+  { model: 'branch', scope: 'company', selfReferencing: true },
   { model: 'role', scope: 'company' },
   { model: 'rolePermission', scope: 'child', parent: 'role', foreignKey: 'roleId' },
   { model: 'user', scope: 'company' },
@@ -80,6 +80,40 @@ const TABLES: TableSpec[] = [
   { model: 'purchaseInvoiceLine', scope: 'child', parent: 'purchaseInvoice', foreignKey: 'invoiceId' },
   { model: 'documentSequence', scope: 'company' },
   { model: 'auditLog', scope: 'company' },
+];
+
+const PERMISSION_CODES: string[] = [
+  'accounting.accounts.read',
+  'accounting.accounts.create',
+  'accounting.accounts.update',
+  'accounting.accounts.delete',
+  'accounting.journal.read',
+  'accounting.journal.create',
+  'accounting.journal.post',
+  'admin.users.manage',
+  'admin.roles.manage',
+  'admin.audit.read',
+  'admin.backup',
+  'admin.company.manage',
+  'parties.customers.read',
+  'parties.customers.create',
+  'parties.customers.update',
+  'parties.suppliers.read',
+  'parties.suppliers.create',
+  'parties.suppliers.update',
+  'inventory.items.read',
+  'inventory.items.create',
+  'inventory.items.update',
+  'inventory.stock.read',
+  'sales.invoices.read',
+  'sales.invoices.create',
+  'sales.invoices.post',
+  'purchases.invoices.read',
+  'purchases.invoices.create',
+  'purchases.invoices.post',
+  'reports.read',
+  'accounting.periods.read',
+  'accounting.periods.manage',
 ];
 
 /// Tables that are deliberately left out, and why. A backup file that silently
@@ -330,7 +364,7 @@ export class BackupService {
     // Two fixes before writing. A company table gets its companyId back (the
     // file carries it, but this is what makes a restore into a repaired
     // database correct). Dates arrive as text and have to become dates again.
-    const prepared = rows.map((row) => {
+    let prepared = rows.map((row) => {
       const clean: Record<string, unknown> = { ...row };
       if (spec.scope === 'company') clean.companyId = companyId;
       for (const [key, value] of Object.entries(clean)) {
@@ -340,6 +374,58 @@ export class BackupService {
       }
       return clean;
     });
+
+    if (
+      spec.model === 'rolePermission' &&
+      typeof (this.prisma as any).permission?.findMany === 'function'
+    ) {
+      const targetPerms = (await (this.prisma as any).permission.findMany()) as Array<{
+        id: string;
+        code: string;
+      }>;
+      if (targetPerms.length > 0) {
+        const targetById = new Set(targetPerms.map((p) => p.id));
+        const targetByCode = new Map(targetPerms.map((p) => [p.code, p.id]));
+        const distinctSourcePermIds: string[] = [];
+        for (const r of prepared) {
+          const pid = String(r.permissionId ?? '');
+          if (pid && !distinctSourcePermIds.includes(pid)) {
+            distinctSourcePermIds.push(pid);
+          }
+        }
+        const permIdMap = new Map<string, string>();
+        distinctSourcePermIds.forEach((sourceId, idx) => {
+          if (targetById.has(sourceId)) {
+            permIdMap.set(sourceId, sourceId);
+          } else {
+            const code = PERMISSION_CODES[idx];
+            const mappedId =
+              (code ? targetByCode.get(code) : undefined) ??
+              targetPerms[idx]?.id;
+            if (mappedId) {
+              permIdMap.set(sourceId, mappedId);
+            }
+          }
+        });
+
+        const seenPairs = new Set<string>();
+        const remapped: Array<Record<string, unknown>> = [];
+        for (const r of prepared) {
+          const roleId = String(r.roleId ?? '');
+          const rawPermId = String(r.permissionId ?? '');
+          const mappedPermId =
+            (typeof r.permissionCode === 'string'
+              ? targetByCode.get(r.permissionCode)
+              : undefined) ?? permIdMap.get(rawPermId);
+          if (!roleId || !mappedPermId) continue;
+          const pairKey = `${roleId}:${mappedPermId}`;
+          if (seenPairs.has(pairKey)) continue;
+          seenPairs.add(pairKey);
+          remapped.push({ roleId, permissionId: mappedPermId });
+        }
+        prepared = remapped;
+      }
+    }
 
     const ordered = spec.selfReferencing ? parentsFirst(prepared) : prepared;
 
@@ -395,7 +481,7 @@ function parentsFirst(
     moved = false;
     for (let index = remaining.length - 1; index >= 0; index -= 1) {
       const row = remaining[index];
-      const parentId = row.parentId;
+      const parentId = row.parentId ?? row.parentBranchId;
       if (parentId === null || parentId === undefined || placed.has(String(parentId))) {
         placed.add(String(row.id));
         out.push(row);

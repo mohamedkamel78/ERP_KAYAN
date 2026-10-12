@@ -122,15 +122,28 @@ if (Has "backend\scripts\prepare-database.mjs") {
 Check "its libraries are there (backend\node_modules)" (Has "backend\node_modules")
 Check "Prisma's client was generated for this platform" (Has "backend\node_modules\.prisma\client")
 
-# PostgreSQL is installed by KAYAN-Setup from the embedded official EDB installer.
-# It lives under ProgramData so the service and company data survive app upgrades/uninstall.
-$pgInstaller = Join-Path $folder "backend\pg\postgresql-installer.exe"
-Check "the official PostgreSQL Windows installer is embedded in KAYAN-Setup" (Test-Path $pgInstaller)
-if (Test-Path $pgInstaller) {
-  $installerInfo = Get-Item $pgInstaller
-  Check "the embedded PostgreSQL installer is a full distribution" ($installerInfo.Length -gt 20000000) ("size=" + [math]::Round($installerInfo.Length / 1MB, 1) + " MB")
-  $installerHeader = [System.IO.File]::ReadAllBytes($pgInstaller)[0..1]
-  Check "the embedded PostgreSQL installer is a Windows executable" ($installerHeader[0] -eq 0x4D -and $installerHeader[1] -eq 0x5A)
+# Full database backups and the local PostgreSQL service use the bundled
+# PostgreSQL bin/share/lib runtime under backend\pg.
+$pgDump = Join-Path $folder "backend\pg\bin\pg_dump.exe"
+$pgRestore = Join-Path $folder "backend\pg\bin\pg_restore.exe"
+Check "the backup tool travels with it (backend\pg\bin\pg_dump.exe)" (Test-Path $pgDump)
+Check "the restore tool travels with it (backend\pg\bin\pg_restore.exe)" (Test-Path $pgRestore)
+Check "the PostgreSQL initializer ships with the installer" (Has "backend\pg\bin\initdb.exe")
+Check "the PostgreSQL service controller ships with the installer" (Has "backend\pg\bin\pg_ctl.exe")
+Check "the PostgreSQL client ships with the installer" (Has "backend\pg\bin\psql.exe")
+Check "the PostgreSQL server binary ships with the installer" (Has "backend\pg\bin\postgres.exe")
+Check "the PostgreSQL share data needed to initialize a cluster ships with it" (Has "backend\pg\share\postgres.bki")
+Check "the PostgreSQL timezone data ships with it" (Has "backend\pg\share\timezone")
+Check "the PostgreSQL PL/pgSQL extension library ships with it" (Has "backend\pg\lib\plpgsql.dll")
+Check "libpq travels next to the tools (backend\pg\bin\libpq.dll)" (Has "backend\pg\bin\libpq.dll")
+foreach ($toolName in @("pg_dump.exe", "pg_restore.exe", "initdb.exe", "pg_ctl.exe", "psql.exe", "postgres.exe")) {
+  $toolPath = Join-Path $folder "backend\pg\bin\$toolName"
+  if (Test-Path $toolPath) {
+    $toolVersion = & $toolPath --version 2>&1
+    Check "$toolName runs from the packaged PostgreSQL folder" ($LASTEXITCODE -eq 0 -and "$toolVersion" -match [regex]::Escape($toolName.Replace(".exe", ""))) "$toolVersion"
+  } else {
+    Check "$toolName runs from the packaged PostgreSQL folder" $false "missing"
+  }
 }
 
 # The development toolchain has no business travelling with a customer's copy.

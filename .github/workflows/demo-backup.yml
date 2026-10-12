@@ -96,6 +96,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ -s demo-data/kayan-company-backup-demo.json ]; then
+            echo "The committed demo-data/kayan-company-backup-demo.json already exists and is valid; skipping duplicate commit."
+            exit 0
+          fi
           mkdir -p demo-data
           cp backend/dist-demo/kayan-company-backup-*.json demo-data/kayan-company-backup-demo.json
           git config user.name "github-actions[bot]"

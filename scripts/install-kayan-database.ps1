@@ -1,92 +1,141 @@
-# Install the embedded official PostgreSQL distribution as its own persistent Windows service.
-# KAYAN-Setup remains the only distributed installer. Existing data/configuration is preserved.
+# Installer post-install database step.
+#
+# Runs elevated during KAYAN-Setup.exe installation so the PostgreSQL runtime,
+# database cluster, Windows service, and kayan.env live under ProgramData and
+# survive app upgrades or uninstall.
+
 [CmdletBinding()]
-param([Parameter(Mandatory = $true)][string]$AppDir)
+param(
+  [string]$AppDir = "",
+  [int]$Port = 5433
+)
 
 $ErrorActionPreference = "Stop"
-$logDir = Join-Path $env:ProgramData "KAYAN-ERP"
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-$packageInstaller = Join-Path $AppDir "backend\pg\postgresql-installer.exe"
-$manager = Join-Path $AppDir "backend\scripts\manage-kayan-db.ps1"
-$runtimeRoot = Join-Path $logDir "pgsql"
-$pgDir = Join-Path $runtimeRoot "bin"
-$dataDir = Join-Path $logDir "pgdata"
-$settings = Join-Path $logDir "kayan.env"
-$runtimeVersion = Join-Path $dataDir "PG_VERSION"
-$serviceName = "KAYAN_PostgreSQL"
 
-if (-not (Test-Path $manager)) { throw ("The packaged PostgreSQL manager is missing: " + $manager) }
+if ([string]::IsNullOrWhiteSpace($AppDir)) {
+  $AppDir = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+}
 
-# A reinstall must never replace runtime files or credentials used by an existing company database.
-$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-if ($service) {
-  if (-not (Test-Path $runtimeVersion) -or -not (Test-Path (Join-Path $pgDir "postgres.exe"))) {
-    throw "KAYAN_PostgreSQL already exists but its persistent runtime/data is incomplete. Setup stopped without changing company data."
+$programDataRoot = Join-Path $env:ProgramData "KAYAN-ERP"
+$pgRuntimeRoot = Join-Path $programDataRoot "pgsql"
+$dataRoot = Join-Path $programDataRoot "pgdata"
+$logFile = Join-Path $programDataRoot "installer-db-setup.log"
+$errLogFile = Join-Path $programDataRoot "installer-db-setup-error.log"
+$bundledPgRoot = Join-Path $AppDir "backend\pg"
+$manageScript = Join-Path $AppDir "backend\scripts\manage-kayan-db.ps1"
+
+New-Item -ItemType Directory -Force -Path $programDataRoot | Out-Null
+
+function Write-InstallLog([string]$Message) {
+  $line = ("[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message)
+  Add-Content -Path $logFile -Value $line -Encoding UTF8
+  Write-Host $line
+}
+
+function Test-PgRuntime([string]$Root) {
+  $required = @(
+    "bin\initdb.exe",
+    "bin\pg_ctl.exe",
+    "bin\postgres.exe",
+    "bin\psql.exe",
+    "bin\pg_dump.exe",
+    "bin\pg_restore.exe",
+    "share\postgres.bki",
+    "share\timezone",
+    "share\timezonesets",
+    "lib\plpgsql.dll"
+  )
+  foreach ($rel in $required) {
+    if (-not (Test-Path (Join-Path $Root $rel))) {
+      return $false
+    }
   }
-  if (-not (Test-Path $settings)) { throw "Existing KAYAN database data was found but kayan.env is missing. Setup did not regenerate credentials or modify the database." }
-  $serviceInfo = Get-CimInstance Win32_Service -Filter "Name='KAYAN_PostgreSQL'" -ErrorAction Stop
-  if ($serviceInfo.PathName -notlike "*$runtimeRoot*") { throw ("A service named KAYAN_PostgreSQL exists outside the KAYAN runtime; refusing to replace it: " + $serviceInfo.PathName) }
-  if ($service.Status -ne "Running") { Start-Service -Name $serviceName -ErrorAction Stop }
-  $tcp = [System.Net.Sockets.TcpClient]::new()
-  try {
-    $connect = $tcp.BeginConnect("127.0.0.1", 5433, $null, $null)
-    if (-not $connect.AsyncWaitHandle.WaitOne(10000)) { throw "Existing KAYAN PostgreSQL service did not listen on port 5433." }
-    $tcp.EndConnect($connect)
-  } finally { $tcp.Dispose() }
-  Write-Host "Existing KAYAN PostgreSQL runtime, service, credentials and company data were preserved."
-  exit 0
+  return $true
 }
-if (Test-Path $runtimeVersion) { throw "Existing KAYAN database data was found without its registered service. Setup stopped without initializing, replacing, or deleting the data." }
-if (-not (Test-Path $packageInstaller)) { throw ("The embedded PostgreSQL installer is missing: " + $packageInstaller) }
-if ((Get-Item $packageInstaller).Length -lt 20000000) { throw "The embedded PostgreSQL installer is unexpectedly small or incomplete." }
-if (Test-Path $runtimeRoot) { Remove-Item -Recurse -Force $runtimeRoot }
-New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
 
-$postgresPassword = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
-$servicePassword = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
-$serviceAccount = "kayanpg" + [guid]::NewGuid().ToString("N").Substring(0, 8)
-$installerTrace = Join-Path $logDir "postgresql-installer-trace.log"
-$installerStdout = Join-Path $logDir "postgresql-installer-stdout.log"
-$installerStderr = Join-Path $logDir "postgresql-installer-stderr.log"
-$arguments = '--mode unattended --unattendedmodeui none --prefix "' + $runtimeRoot + '" --datadir "' + $dataDir + '" --serverport 5433 --servicename KAYAN_PostgreSQL --superaccount postgres --superpassword ' + $postgresPassword + ' --serviceaccount ' + $serviceAccount + ' --servicepassword ' + $servicePassword + ' --enable_acledit 1 --install_runtimes yes --disable-components "pgAdmin,stackbuilder" --debugtrace "' + $installerTrace + '"'
-Write-Host "Installing the embedded EDB PostgreSQL server as a dedicated KAYAN_PostgreSQL service..."
-$installer = Start-Process -FilePath $packageInstaller -ArgumentList $arguments -Wait -PassThru -RedirectStandardOutput $installerStdout -RedirectStandardError $installerStderr
-if ($installer.ExitCode -ne 0) {
-  $details = @()
-  foreach ($log in @($installerStderr, $installerStdout, $installerTrace)) {
-    if (Test-Path $log) { $details += ("--- " + $log + " ---"); $details += Get-Content $log -Tail 80 }
+Write-InstallLog "Starting KAYAN PostgreSQL runtime installation from $AppDir"
+
+if (-not (Test-PgRuntime $pgRuntimeRoot)) {
+  if (-not (Test-PgRuntime $bundledPgRoot)) {
+    throw "Bundled PostgreSQL runtime is incomplete at $bundledPgRoot. Check $logFile."
   }
-  throw ("The embedded PostgreSQL installer failed with exit code " + $installer.ExitCode + "." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
-}
-
-$required = @("bin\initdb.exe", "bin\pg_ctl.exe", "bin\postgres.exe", "bin\psql.exe", "bin\pg_dump.exe", "bin\pg_restore.exe", "share\postgres.bki", "share\timezone", "share\timezonesets", "lib\plpgsql.dll")
-foreach ($item in $required) {
-  if (-not (Test-Path (Join-Path $runtimeRoot $item))) { throw ("PostgreSQL installation completed but required runtime file is missing: " + $item) }
-}
-if (-not (Test-Path $runtimeVersion)) { throw "PostgreSQL installer returned success but did not initialize the persistent KAYAN data directory." }
-$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-if (-not $service) { throw "PostgreSQL installer returned success but did not create the KAYAN_PostgreSQL Windows service." }
-if ($service.Status -ne "Running") { Start-Service -Name $serviceName -ErrorAction Stop }
-
-# Provision application credentials and protected runtime configuration.
-$env:KAYAN_POSTGRES_ADMIN_PASSWORD = $postgresPassword
-$powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-$managerStdout = Join-Path $logDir "kayan-db-provision.log"
-$managerStderr = Join-Path $logDir "kayan-db-provision-error.log"
-$managerArguments = '-ExecutionPolicy Bypass -NoProfile -File "' + $manager + '" -Action install -Port 5433 -DataDir "' + $dataDir + '" -PgBinDir "' + $pgDir + '"'
-try {
-  $provision = Start-Process -FilePath $powershell -ArgumentList $managerArguments -Wait -PassThru -RedirectStandardOutput $managerStdout -RedirectStandardError $managerStderr
-} finally { Remove-Item Env:KAYAN_POSTGRES_ADMIN_PASSWORD -ErrorAction SilentlyContinue }
-if ($provision.ExitCode -ne 0) {
-  $details = @()
-  foreach ($log in @($managerStderr, $managerStdout)) {
-    if (Test-Path $log) { $details += ("--- " + $log + " ---"); $details += Get-Content $log -Tail 80 }
+  Write-InstallLog "Copying bundled PostgreSQL runtime (bin, share, lib) to $pgRuntimeRoot"
+  New-Item -ItemType Directory -Force -Path $pgRuntimeRoot | Out-Null
+  foreach ($sub in @("bin", "share", "lib")) {
+    $src = Join-Path $bundledPgRoot $sub
+    $dst = Join-Path $pgRuntimeRoot $sub
+    if (Test-Path $dst) {
+      Remove-Item -Path $dst -Recurse -Force
+    }
+    Copy-Item -Path $src -Destination $dst -Recurse -Force
   }
-  throw ("KAYAN database/credential provisioning failed with exit code " + $provision.ExitCode + "." + [Environment]::NewLine + ($details -join [Environment]::NewLine))
 }
-if (-not (Test-Path $settings)) { throw "PostgreSQL was installed but protected KAYAN runtime settings were not written." }
-$service = Get-Service -Name $serviceName -ErrorAction Stop
-if ($service.Status -ne "Running") { throw "KAYAN_PostgreSQL did not reach Running state." }
-$serviceInfo = Get-CimInstance Win32_Service -Filter "Name='KAYAN_PostgreSQL'" -ErrorAction Stop
-if ($serviceInfo.PathName -notlike "*$runtimeRoot*") { throw ("KAYAN_PostgreSQL is not using the persistent ProgramData runtime: " + $serviceInfo.PathName) }
-Write-Host "KAYAN PostgreSQL is installed and running; its service, runtime and data persist after app uninstall."
+
+if (-not (Test-PgRuntime $pgRuntimeRoot)) {
+  throw "Installed PostgreSQL runtime under $pgRuntimeRoot is incomplete. Check $logFile."
+}
+
+# Ensure Windows service accounts (NetworkService S-1-5-20 and LocalSystem S-1-5-18)
+# can read and execute the PostgreSQL runtime under ProgramData.
+& icacls.exe $pgRuntimeRoot /grant "*S-1-5-20:(OI)(CI)(RX)" "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" /T /C | Out-Null
+
+if (-not (Test-Path $manageScript)) {
+  throw "Database service script was not found at $manageScript."
+}
+
+if (Test-Path $errLogFile) {
+  Remove-Item $errLogFile -Force -ErrorAction SilentlyContinue
+}
+
+Write-InstallLog "Provisioning KAYAN_PostgreSQL service and database on port $Port"
+$proc = Start-Process -FilePath "powershell.exe" `
+  -ArgumentList @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-File", $manageScript,
+    "-Action", "install",
+    "-Port", "$Port",
+    "-DataDir", $dataRoot,
+    "-PgBinDir", (Join-Path $pgRuntimeRoot "bin")
+  ) `
+  -Wait -PassThru -NoNewWindow `
+  -RedirectStandardOutput $logFile `
+  -RedirectStandardError $errLogFile
+
+if ($proc.ExitCode -ne 0) {
+  $stdoutTail = if (Test-Path $logFile) { (Get-Content $logFile -Tail 40) -join "`n" } else { "" }
+  $stderrTail = if (Test-Path $errLogFile) { (Get-Content $errLogFile -Tail 40) -join "`n" } else { "" }
+  $pgLogFile = Join-Path $dataRoot "log\postgresql.log"
+  $pgLogTail = if (Test-Path $pgLogFile) { (Get-Content $pgLogFile -Tail 40) -join "`n" } else { "" }
+  throw "KAYAN database setup failed with exit code $($proc.ExitCode). Logs: $logFile`nSTDOUT:`n$stdoutTail`nSTDERR:`n$stderrTail`nPG_LOG:`n$pgLogTail"
+}
+
+$service = Get-Service -Name "KAYAN_PostgreSQL" -ErrorAction SilentlyContinue
+if (-not $service -or $service.Status -ne "Running") {
+  throw "KAYAN_PostgreSQL service is not running after setup. Check $logFile."
+}
+
+$serviceConfig = Get-CimInstance Win32_Service -Filter "Name='KAYAN_PostgreSQL'" -ErrorAction SilentlyContinue
+if (-not $serviceConfig -or $serviceConfig.PathName -notlike "*$pgRuntimeRoot*") {
+  throw "KAYAN_PostgreSQL service path does not use the persistent ProgramData runtime: $($serviceConfig.PathName)"
+}
+
+$portReady = $false
+for ($i = 0; $i -lt 30; $i++) {
+  $check = Test-NetConnection -ComputerName 127.0.0.1 -Port $Port -WarningAction SilentlyContinue
+  if ($check.TcpTestSucceeded) {
+    $portReady = $true
+    break
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not $portReady) {
+  throw "KAYAN_PostgreSQL service started, but port $Port did not accept TCP connections. Check $logFile."
+}
+
+$envFile = Join-Path $programDataRoot "kayan.env"
+if (-not (Test-Path $envFile)) {
+  throw "Database configuration file was not created at $envFile. Check $logFile."
+}
+
+Write-InstallLog "KAYAN_PostgreSQL is installed, running on port $Port, and configured at $envFile"

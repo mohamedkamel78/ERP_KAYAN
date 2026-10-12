@@ -25,7 +25,7 @@ class _NavItem {
 ///
 /// This is deliberately not a stretched desktop layout: the navigation model
 /// itself changes with the available width.
-class ErpShell extends ConsumerWidget {
+class ErpShell extends ConsumerStatefulWidget {
   const ErpShell({super.key, required this.currentPath, required this.child});
 
   final String currentPath;
@@ -35,12 +35,26 @@ class ErpShell extends ConsumerWidget {
   static const _extendedBreakpoint = 1280.0;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ErpShell> createState() => _ErpShellState();
+}
+
+class _ErpShellState extends ConsumerState<ErpShell> {
+  final ScrollController _navScrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _navScrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
-    final isWide = width >= _wideBreakpoint;
+    final isWide = width >= ErpShell._wideBreakpoint;
+    final isExtended = width >= ErpShell._extendedBreakpoint;
     final items = _navigationItems(context);
     final selectedIndex = items
-        .indexWhere((item) => item.path == currentPath)
+        .indexWhere((item) => item.path == widget.currentPath)
         .clamp(0, items.length - 1);
 
     return Scaffold(
@@ -48,26 +62,33 @@ class ErpShell extends ConsumerWidget {
         title: Text(items[selectedIndex].label),
         actions: const [_LanguageMenu(), _SignOutButton()],
       ),
-      drawer: isWide ? null : _ModuleDrawer(items: items, current: currentPath),
+      drawer: isWide
+          ? null
+          : _ModuleDrawer(items: items, current: widget.currentPath),
       body: isWide
           ? Row(
               children: [
                 // A visible, explicitly scrollable navigation list keeps
                 // every module reachable even on short screens in Arabic RTL.
-                // The scrollbar gives users an obvious way to move up/down.
+                // Using a dedicated ScrollController avoids conflicting with
+                // scrollable content inside the active screen.
                 SizedBox(
-                  width: width >= _extendedBreakpoint ? 240 : 80,
+                  width: isExtended ? 240 : 80,
                   child: Scrollbar(
+                    controller: _navScrollController,
                     thumbVisibility: true,
                     child: ListView(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      key: const Key('erp-shell-nav-list'),
+                      controller: _navScrollController,
+                      primary: false,
+                      padding: const EdgeInsets.only(top: 8, bottom: 24),
                       children: [
                         for (final item in items)
-                          width >= _extendedBreakpoint
+                          isExtended
                               ? ListTile(
                                   leading: Icon(item.icon),
                                   title: Text(item.label),
-                                  selected: item.path == currentPath,
+                                  selected: item.path == widget.currentPath,
                                   onTap: () => context.go(item.path),
                                 )
                               : Tooltip(
@@ -75,7 +96,7 @@ class ErpShell extends ConsumerWidget {
                                   child: IconButton(
                                     onPressed: () => context.go(item.path),
                                     icon: Icon(item.icon),
-                                    color: item.path == currentPath
+                                    color: item.path == widget.currentPath
                                         ? Theme.of(context).colorScheme.primary
                                         : null,
                                   ),
@@ -85,10 +106,10 @@ class ErpShell extends ConsumerWidget {
                   ),
                 ),
                 const VerticalDivider(width: 1),
-                Expanded(child: child),
+                Expanded(child: widget.child),
               ],
             )
-          : child,
+          : widget.child,
     );
   }
 
@@ -107,7 +128,11 @@ class ErpShell extends ConsumerWidget {
         l10n.fiscalPeriods,
       ),
       _NavItem(AppRoutes.customers, Icons.people_outline, l10n.customers),
-      _NavItem(AppRoutes.suppliers, Icons.local_shipping_outlined, l10n.suppliers),
+      _NavItem(
+        AppRoutes.suppliers,
+        Icons.local_shipping_outlined,
+        l10n.suppliers,
+      ),
       _NavItem(AppRoutes.items, Icons.category_outlined, l10n.items),
       _NavItem(AppRoutes.stock, Icons.inventory_2_outlined, l10n.stock),
       _NavItem(
@@ -126,8 +151,16 @@ class ErpShell extends ConsumerWidget {
         l10n.chartOfAccounts,
       ),
       _NavItem(AppRoutes.reports, Icons.bar_chart_outlined, l10n.reports),
-      _NavItem(AppRoutes.importData, Icons.upload_file_outlined, l10n.importData),
-      _NavItem(AppRoutes.backup, Icons.verified_user_outlined, l10n.backupTitle),
+      _NavItem(
+        AppRoutes.importData,
+        Icons.upload_file_outlined,
+        l10n.importData,
+      ),
+      _NavItem(
+        AppRoutes.backup,
+        Icons.verified_user_outlined,
+        l10n.backupTitle,
+      ),
       _NavItem(
         AppRoutes.administration,
         Icons.admin_panel_settings_outlined,
@@ -154,6 +187,7 @@ class _ModuleDrawer extends StatelessWidget {
     return Drawer(
       child: SafeArea(
         child: ListView(
+          padding: const EdgeInsets.only(top: 8, bottom: 24),
           children: [
             for (final item in items)
               ListTile(

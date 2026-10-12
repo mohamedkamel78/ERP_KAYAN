@@ -241,28 +241,99 @@ $portablePg = Join-Path $toolsFolder "pgsql\bin"
 # an unrelated PostgreSQL build can leave binaries compiled against an absolute
 # build-machine timezone path. That makes the installed database fail at startup.
 $pgVersion = "16.15"
-$installerUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64.exe"
-$installerFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-installer.exe"
-$pgFolder = Join-Path $backendFolder "pg"
-$embeddedInstaller = Join-Path $pgFolder "postgresql-installer.exe"
-Write-Host "      downloading the official EDB PostgreSQL $pgVersion installer for first-run installation"
-if ((Test-Path $installerFile) -and ((Get-Item $installerFile).Length -lt 20000000)) { Remove-Item -Force $installerFile }
-if (-not (Test-Path $installerFile)) {
-  & curl.exe -fsSL --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors -o $installerFile $installerUrl
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $installerFile)) { Fail ("Could not download the official EDB PostgreSQL installer from " + $installerUrl) }
+$archiveUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
+$archiveFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-binaries.zip"
+$extractRoot = Join-Path $env:TEMP "kayan-postgresql-runtime-$pgVersion"
+Write-Host "      downloading the official EDB PostgreSQL $pgVersion binary archive"
+if ((Test-Path $archiveFile) -and ((Get-Item $archiveFile).Length -lt 200000000)) { Remove-Item -Force $archiveFile }
+if (-not (Test-Path $archiveFile)) {
+  & curl.exe -fsSL --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors -o $archiveFile $archiveUrl
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $archiveFile)) { Fail ("Could not download the official EDB PostgreSQL binary archive from " + $archiveUrl) }
 }
-if ((Get-Item $installerFile).Length -lt 20000000) { Fail "The PostgreSQL installer download is incomplete or unexpectedly small." }
-$installerHeader = [System.IO.File]::ReadAllBytes($installerFile)[0..1]
-if ($installerHeader[0] -ne 0x4D -or $installerHeader[1] -ne 0x5A) { Fail "The embedded PostgreSQL installer is not a Windows executable." }
-# EDB installer launchers may be PE32; the installed PostgreSQL server binaries are tested after setup.
-New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
-Copy-Item $installerFile $embeddedInstaller -Force
-if ((Get-Item $embeddedInstaller).Length -lt 20000000) { Fail "The PostgreSQL installer was not embedded into the KAYAN package." }
-Write-Host ("      official EDB PostgreSQL installer embedded at " + $embeddedInstaller)
-# The official EDB installer is executed by KAYAN-Setup during installation.
-# This avoids shipping binaries built with non-relocatable build-time paths.
+if ((Get-Item $archiveFile).Length -lt 200000000) { Fail "The PostgreSQL binary archive is incomplete or unexpectedly small." }
+$archiveHeader = [System.IO.File]::ReadAllBytes($archiveFile)[0..3]
+if ($archiveHeader[0] -ne 0x50 -or $archiveHeader[1] -ne 0x4B) { Fail "The PostgreSQL archive is not a ZIP file; refusing to package it." }
+if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+Write-Host "      extracting PostgreSQL server runtime (bin, share, lib) with tar.exe"
+& tar.exe -xf $archiveFile -C $extractRoot pgsql/bin pgsql/share pgsql/lib
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $extractRoot "pgsql\bin\initdb.exe"))) {
+  & tar.exe -xf $archiveFile -C $extractRoot
+  if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
+}
+$pgBin = Join-Path $extractRoot "pgsql\bin"
+if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
+  $initDbCandidate = Get-ChildItem -Path $extractRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $initDbCandidate) {
+    Fail "The official EDB archive extracted but contains no initdb.exe."
+  }
+  $pgBin = $initDbCandidate.Directory.FullName
+}
+$pgRoot = Split-Path -Parent $pgBin
+if ((Get-PeMachine (Join-Path $pgBin "initdb.exe")) -ne 0x8664) { Fail "The extracted PostgreSQL initdb.exe is not a Windows x64 executable." }
+Write-Host ("      official EDB PostgreSQL binaries extracted from " + $pgBin)
+
+# Keep PostgreSQL's required bin/, share/, and lib/ sibling layout inside
+# backend\pg so PostgreSQL's make_relative_path() resolves share/timezone and
+# lib/plpgsql.dll relative to bin\postgres.exe on any machine.
+$pgFolder = Join-Path $backendFolder "pg"
+$pgBinFolder = Join-Path $pgFolder "bin"
+$pgShareFolder = Join-Path $pgFolder "share"
+$pgLibFolder = Join-Path $pgFolder "lib"
+New-Item -ItemType Directory -Force -Path $pgBinFolder | Out-Null
+New-Item -ItemType Directory -Force -Path $pgLibFolder | Out-Null
+
+foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe", "pg_isready.exe")) {
+  $src = Join-Path $pgBin $tool
+  if (Test-Path $src) {
+    Copy-Item $src $pgBinFolder -Force
+  }
+}
+Get-ChildItem $pgBin -Filter "*.dll" -File | Where-Object { (Get-PeMachine $_.FullName) -eq 0x8664 } | Copy-Item -Destination $pgBinFolder -Force
+
+$shareSource = Join-Path $pgRoot "share"
+if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
+  Fail "The PostgreSQL archive did not provide the required share/postgres.bki data."
+}
+Copy-Item $shareSource $pgShareFolder -Recurse -Force
+
+$libSource = Join-Path $pgRoot "lib"
+if (-not (Test-Path (Join-Path $libSource "plpgsql.dll"))) {
+  Fail "The PostgreSQL archive is missing the required lib/plpgsql.dll runtime."
+}
+Get-ChildItem $libSource -Filter "*.dll" -File | Where-Object { (Get-PeMachine $_.FullName) -eq 0x8664 } | Copy-Item -Destination $pgLibFolder -Force
+if (-not (Test-Path (Join-Path $pgLibFolder "plpgsql.dll"))) {
+  Fail "plpgsql.dll was not copied into the packaged PostgreSQL lib folder."
+}
+Write-Host "      PostgreSQL bin/, share/, and lib/ runtime bundled under $pgFolder"
+
 Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
 Copy-Item (Join-Path $root "scripts\install-kayan-database.ps1") (Join-Path $backendFolder "scripts\install-kayan-database.ps1") -Force
+
+# Verify every required tool runs from the final packaged folder, and prove
+# initdb.exe + postgres.exe can initialize a cluster from the packaged
+# bin/share/lib layout before building the installer.
+foreach ($tool in @("initdb.exe", "pg_ctl.exe", "postgres.exe", "psql.exe", "pg_dump.exe", "pg_restore.exe")) {
+  $probe = Join-Path $pgBinFolder $tool
+  if (-not (Test-Path $probe)) { Fail "Required PostgreSQL tool is missing from package: $probe" }
+  $line = & $probe --version 2>&1
+  if ($LASTEXITCODE -ne 0 -or -not ("$line" -match [regex]::Escape($tool.Replace(".exe", "")))) {
+    Fail "The bundled $tool did not answer --version from $pgBinFolder. The package is not shippable."
+  }
+  Write-Host "      bundled $($line | Select-Object -First 1)"
+}
+
+$probeData = Join-Path $env:TEMP ("kayan-pg-initdb-probe-" + [guid]::NewGuid().ToString("N"))
+$probeShare = Join-Path $pgFolder "share"
+try {
+  & (Join-Path $pgBinFolder "initdb.exe") -D $probeData -U postgres -A trust -E UTF8 --locale=C -L $probeShare
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $probeData "PG_VERSION"))) {
+    Fail "The bundled PostgreSQL initdb could not initialize with the packaged bin/share/lib layout. Do not ship this package."
+  }
+  Write-Host "      verified packaged initdb.exe + postgres.exe cluster bootstrap from $pgBinFolder"
+} finally {
+  if (Test-Path $probeData) { Remove-Item $probeData -Recurse -Force -ErrorAction SilentlyContinue }
+}
 
 # ------------------------------------------------------------- 6. client
 Step "6/8" "Building the client (Flutter, Windows, release)"

@@ -445,11 +445,21 @@ async function main() {
     );
 
     // ── 6b. test restoring the company JSON backup via /backup/restore ───
+    const { existsSync, readFileSync } = await import('node:fs');
+    const committedDemoJsonPath = join(
+      backendDir,
+      '..',
+      'demo-data',
+      'kayan-company-backup-demo.json',
+    );
+    const jsonToRestore = existsSync(committedDemoJsonPath)
+      ? readFileSync(committedDemoJsonPath)
+      : jsonBytes;
     const jsonForm = new FormData();
     jsonForm.append('replace', 'true');
     jsonForm.append(
       'file',
-      new Blob([jsonBytes], { type: 'application/json' }),
+      new Blob([jsonToRestore], { type: 'application/json' }),
       'kayan-company-backup-demo.json',
     );
     const jsonRestoreRes = await fetch(`${restoreBase}/backup/restore?replace=true`, {
@@ -465,9 +475,15 @@ async function main() {
       `HTTP ${jsonRestoreRes.status}, total written=${jsonRestoreBody?.total ?? 0}`,
     );
 
+    const demoLoginAfterJson = await loginAs(restoreBase);
+    check(
+      'demo login succeeds after importing demo-data/kayan-company-backup-demo.json',
+      Boolean(demoLoginAfterJson),
+    );
+
     const afterJson = await fetch(
       `${restoreBase}/reports/trial-balance?from=2000-01-01&to=2099-12-31`,
-      { headers: { Authorization: `Bearer ${signedIn}` } },
+      { headers: { Authorization: `Bearer ${demoLoginAfterJson || signedIn}` } },
     ).then((response) => response.json());
     check(
       'the books balance after restoring from company JSON backup',

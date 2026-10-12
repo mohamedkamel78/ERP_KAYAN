@@ -214,5 +214,58 @@ describe('BackupService & BackupController (Company JSON Backup)', () => {
       expect(prismaMock.branch.createMany).toHaveBeenCalled();
       expect(prismaMock.journalEntry.createMany).toHaveBeenCalled();
     });
+
+    test('restores committed demo-data/kayan-company-backup-demo.json with remapped permission IDs and parent-first branches', async () => {
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const demoPath = path.resolve(
+        __dirname,
+        '../../../../demo-data/kayan-company-backup-demo.json',
+      );
+      const demoBackup: BackupFile = JSON.parse(
+        fs.readFileSync(demoPath, 'utf8'),
+      );
+
+      expect(demoBackup.format).toBe('kayan-backup');
+      expect(demoBackup.companyCode).toBe('DEMO');
+
+      // Verify every journal entry in the demo backup is balanced.
+      const entries = demoBackup.tables.journalEntry ?? [];
+      expect(entries.length).toBeGreaterThan(100);
+      for (const je of entries) {
+        expect(Number(je.totalDebit)).toBeCloseTo(Number(je.totalCredit), 4);
+      }
+
+      prismaMock.permission = {
+        findMany: jest.fn(async () =>
+          Array.from({ length: 31 }, (_, idx) => ({
+            id: `target-perm-${idx + 1}`,
+            code: `perm.${idx + 1}`,
+          })),
+        ),
+      };
+
+      const result = await service.restore(demoBackup, COMPANY_ID, {
+        replace: true,
+      });
+      expect(result.companyId).toBe(COMPANY_ID);
+      expect(result.total).toBeGreaterThan(1000);
+
+      // MAIN branch (parentBranchId === null) must be inserted before child branches.
+      expect(prismaMock.branch.createMany).toHaveBeenCalled();
+      const branchCreates = prismaMock.branch.createMany.mock.calls[0][0].data;
+      expect(branchCreates.length).toBe(3);
+      expect(branchCreates[0].code).toBe('MAIN');
+      expect(branchCreates[0].parentBranchId).toBeNull();
+
+      // Role permissions must be remapped to target-perm-* IDs.
+      expect(prismaMock.rolePermission.createMany).toHaveBeenCalled();
+      const rpCall = prismaMock.rolePermission.createMany.mock.calls[0][0];
+      expect(
+        rpCall.data.every((row: any) =>
+          String(row.permissionId).startsWith('target-perm-'),
+        ),
+      ).toBe(true);
+    });
   });
 });
