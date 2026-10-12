@@ -255,12 +255,23 @@ export class ReportTablesService {
     // A movement may carry no description of its own, in which case the entry's
     // description is used; if both are empty the cell stays empty rather than
     // printing "null".
-    const movements = (data.movements as Array<Record<string, string>>).map(
-      (movement) => ({
-        ...movement,
-        description: movement.description ?? '',
-      }),
-    );
+    // The ledger rows carry a nested `source` object for drill-down; a printed
+    // table wants flat text, so the document is flattened into two columns.
+    const movements = (
+      data.movements as Array<Record<string, unknown> & {
+        source?: { type?: string; number?: string } | null;
+      }>
+    ).map((movement) => {
+      const source = movement.source ?? null;
+      const { source: _ignored, ...rest } = movement;
+      void _ignored;
+      return {
+        ...(rest as Record<string, string>),
+        description: (movement.description as string) ?? '',
+        documentType: source?.type ?? '',
+        documentNumber: source?.number ?? '',
+      };
+    });
 
     return this.table({
       slug: 'account-ledger',

@@ -45,5 +45,31 @@ export const PERMISSIONS: Array<[string, string, string, string]> = [
   ['reports.read', 'View reports', 'عرض التقارير', 'reports'],
 
   ['accounting.periods.read', 'View fiscal periods', 'عرض الفترات المالية', 'accounting'],
-  ['accounting.periods.manage', 'Manage fiscal periods', 'إدارة الفترات المالية', 'accounting']
+  ['accounting.periods.manage', 'Manage fiscal periods', 'إدارة الفترات المالية', 'accounting'],
+
+  // Reviewing an entry is a different job from writing one: the whole point of
+  // the permission is that the two can be held by different people.
+  ['accounting.journal.approve', 'Approve journal entries', 'اعتماد القيود اليومية', 'accounting'],
+  ['accounting.costcenters.manage', 'Manage cost centers', 'إدارة مراكز التكلفة', 'accounting'],
+  [
+    'accounting.openingbalances.manage',
+    'Open the books: opening balances',
+    'إدخال الأرصدة الافتتاحية',
+    'accounting',
+  ],
+  // Closing a year is irreversible by design, so it is its own permission.
+  ['accounting.periods.close', 'Close a fiscal year', 'إقفال السنة المالية', 'accounting'],
+
+  ['cash.accounts.read', 'View cash boxes and banks', 'عرض الخزائن والبنوك', 'cash'],
+  ['cash.accounts.manage', 'Manage cash boxes and banks', 'إدارة الخزائن والبنوك', 'cash'],
+  ['cash.vouchers.read', 'View receipts and payments', 'عرض سندات القبض والصرف', 'cash'],
+  ['cash.vouchers.create', 'Create receipts and payments', 'إنشاء سندات القبض والصرف', 'cash'],
+  ['cash.vouchers.post', 'Post and reverse receipts and payments', 'ترحيل وعكس سندات القبض والصرف', 'cash'],
+  ['cash.reconcile', 'Reconcile bank statements', 'تسوية كشوف البنك', 'cash'],
+
+  ['inventory.items.delete', 'Deactivate items', 'إيقاف الأصناف', 'inventory'],
+  ['inventory.stock.adjust', 'Adjust, transfer and count stock', 'تسويات وتحويلات وجرد المخزون', 'inventory'],
+  ['sales.invoices.export', 'Export sales documents', 'تصدير مستندات البيع', 'sales'],
+  ['purchases.invoices.export', 'Export purchase documents', 'تصدير مستندات الشراء', 'purchases'],
+  ['reports.export', 'Export reports', 'تصدير التقارير', 'reports']
 ];

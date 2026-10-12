@@ -6,6 +6,7 @@ import {
 import { InvoiceStatus, JournalStatus, Prisma, StockDirection } from '@prisma/client';
 import { AuditService } from '../../common/audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { CompanySettingsService } from '../../common/settings/company-settings.module';
 import { AccountMapService } from '../accounting/account-map.service';
 import { DocumentNumberService } from '../accounting/document-number.service';
 import { PostingService } from '../accounting/posting.service';
@@ -36,6 +37,7 @@ export class PurchaseInvoicesService {
     private readonly numbers: DocumentNumberService,
     private readonly posting: PostingService,
     private readonly accounts: AccountMapService,
+    private readonly settings: CompanySettingsService,
     private readonly audit: AuditService,
   ) {}
 
@@ -148,7 +150,9 @@ export class PurchaseInvoicesService {
           invoiceNumber,
           supplierReference: dto.supplierReference ?? null,
           invoiceDate: new Date(dto.invoiceDate),
-          dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+          dueDate: dto.dueDate
+            ? new Date(dto.dueDate)
+            : (await this.dueDateFromTerms(companyId, dto.supplierId, new Date(dto.invoiceDate))),
           supplierId: dto.supplierId,
           status: InvoiceStatus.DRAFT,
           subTotal,
@@ -203,6 +207,18 @@ export class PurchaseInvoicesService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Claim the document before anything else happens: two simultaneous
+      // posts must not both receive the same goods into stock.
+      const claimed = await tx.purchaseInvoice.updateMany({
+        where: { id: invoice.id, companyId, status: InvoiceStatus.DRAFT, deletedAt: null },
+        data: { status: InvoiceStatus.POSTED, postedAt: new Date(), postedBy: userId },
+      });
+      if (claimed.count !== 1) {
+        throw new BadRequestException(
+          'This invoice was posted by someone else a moment ago. Reload it to see the current state.',
+        );
+      }
+
       const accounts = await this.accounts.resolve(tx, companyId, [
         'accountsPayable',
         'inventory',
@@ -450,6 +466,24 @@ export class PurchaseInvoicesService {
     return this.findOne(companyId, id);
   }
 
+  /// The due date the supplier's payment terms imply, or null when they have
+  /// none.
+  private async dueDateFromTerms(
+    companyId: string,
+    supplierId: string,
+    invoiceDate: Date,
+  ): Promise<Date | null> {
+    const supplier = await this.prisma.supplier.findFirst({
+      where: { id: supplierId, companyId },
+      select: { paymentTermDays: true },
+    });
+    const days = supplier?.paymentTermDays ?? 0;
+    if (days <= 0) return null;
+    const due = new Date(invoiceDate.getTime());
+    due.setUTCDate(due.getUTCDate() + days);
+    return due;
+  }
+
   private async prepareLines(
     companyId: string,
     input: PurchaseInvoiceLineDto[],
@@ -470,10 +504,12 @@ export class PurchaseInvoicesService {
 
       const quantity = this.positive(raw.quantity, `Line ${index + 1} quantity`);
       const unitPrice = this.nonNegative(raw.unitPrice, `Line ${index + 1} unitPrice`);
-      const taxRate =
+      // Line, then item, then the company's own rate - an item with no rate
+      // of its own follows the company rather than silently becoming exempt.
+      const taxRate: Prisma.Decimal =
         raw.taxRate !== undefined
           ? this.rate(raw.taxRate, `Line ${index + 1} taxRate`)
-          : item.taxRate;
+          : (item.taxRate ?? new Prisma.Decimal((await this.settings.get(companyId)).taxRate));
 
       const lineTotal = quantity.mul(unitPrice).toDecimalPlaces(MONEY_SCALE);
       const taxAmount = lineTotal.mul(taxRate).div(100).toDecimalPlaces(MONEY_SCALE);

@@ -121,6 +121,106 @@ jobs:
           path: build/web
           retention-days: 14
 
+  accounting-scenario:
+    # The accounting, checked the way an accountant meets it: a whole business
+    # cycle driven through the real API against a real PostgreSQL, with every
+    # figure compared against the ledger. It runs on a throwaway database, so
+    # nothing here can touch anybody's books.
+    name: Accounting scenario (real database)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    steps:
+      - name: Take the source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: PostgreSQL tools (the backup part of the scenario uses them)
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm install
+
+      - name: Build the server
+        working-directory: backend
+        run: |
+          npx prisma generate
+          npm run build
+
+      - name: Prepare the database
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          node scripts/prepare-database.mjs
+          npm run seed
+
+      - name: Start the server
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
+          KAYAN_BACKUP_DIR: /tmp/kayan-backups
+          KAYAN_DISABLE_BACKUP_SCHEDULE: "on"
+          JWT_ACCESS_SECRET: ci-scenario-access-secret
+          JWT_REFRESH_SECRET: ci-scenario-refresh-secret
+          JWT_ACCESS_TTL: "900"
+          JWT_REFRESH_TTL: "604800"
+        run: |
+          nohup node dist/src/main.js > /tmp/kayan-scenario-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if grep -q "KAYAN-API-READY" /tmp/kayan-scenario-server.log; then break; fi
+            sleep 2
+          done
+          grep -q "KAYAN-API-READY" /tmp/kayan-scenario-server.log || {
+            tail -40 /tmp/kayan-scenario-server.log
+            exit 1
+          }
+
+      - name: Run the accounting scenario
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://kayan:kayan@127.0.0.1:5432/erp_kayan?schema=public
+          APP_URL: http://127.0.0.1:3000/api/v1
+        run: |
+          set +e
+          node scripts/scenario-accounting.mjs http://127.0.0.1:3000/api/v1 2>&1 | tee /tmp/scenario.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "scenario exit code: $status"
+          exit $status
+
+      - name: Keep the scenario log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accounting-scenario-log
+          path: |
+            /tmp/scenario.log
+            /tmp/kayan-scenario-server.log
+          if-no-files-found: warn
+          retention-days: 30
+
   browser-checks:
     # The program's file promises, checked the way a person meets them: in a
     # real browser against the real server - download an export, open the

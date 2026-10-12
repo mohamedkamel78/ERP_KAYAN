@@ -306,7 +306,7 @@ export class FullBackupService {
    * is worse than no dump at all.
    */
   async createFull(
-    userId: string,
+    userId: string | null,
   ): Promise<{ file: FullBackupFile; durationMs: number }> {
     return this.dump('full', userId);
   }
@@ -526,7 +526,7 @@ export class FullBackupService {
     return entries;
   }
 
-  async remove(name: string, userId: string): Promise<void> {
+  async remove(name: string, userId: string | null): Promise<void> {
     const path = this.safePath(name);
     if (!existsSync(path)) {
       throw new NotFoundException(`No backup file named "${name}" on this server`);
