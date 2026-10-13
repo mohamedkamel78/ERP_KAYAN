@@ -11,6 +11,7 @@ import * as argon2 from 'argon2';
 import { mkdir, readFile, stat, writeFile } from 'fs/promises';
 import { join } from 'path';
 
+import { AuditPurgeService } from '../../common/audit/audit-purge.service';
 import { AuditService } from '../../common/audit/audit.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { MaintenanceService } from '../../common/maintenance/maintenance';
@@ -84,6 +85,7 @@ export class ResetService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly purge: AuditPurgeService,
     private readonly maintenance: MaintenanceService,
     private readonly backups: FullBackupService,
     @Optional() private readonly companyBackups?: BackupService,
@@ -397,11 +399,35 @@ export class ResetService {
               RETURNING t.id`;
             return rows.length;
           });
+          // The trail is append-only in the database. It comes out only
+          // through the purge service, which announces the purge to this
+          // transaction, records who asked for it and why, and switches the
+          // guard straight back on.
+          //
+          // The purge carries the company with it, so the rows it removes are
+          // this company's rows. Rows that belong to no company are
+          // installation-level events — a failed sign-in against a username
+          // that does not exist, a full backup of the whole database — and they
+          // stay: they are not this company's history to erase. The people they
+          // name are looked after too: before the accounts are deleted, the
+          // links that pointed at them are cleared (see `detachUserLinks`).
           await step('auditLogs', async () => {
-            const { count } = await tx.auditLog.deleteMany({
-              where: { companyId: me.companyId },
-            });
-            return count;
+            return this.purge.purge(
+              tx,
+              {
+                companyId: me.companyId,
+                reason: 'company-data-reset',
+                actorUserId: me.id,
+                ipAddress: ipAddress ?? null,
+                userAgent: userAgent ?? null,
+                detail: { backupFile: verified.name, companyCode: me.company?.code ?? null },
+              },
+              // The people are deleted further down this transaction. The
+              // trail's remaining links to them are cleared while the guard is
+              // open: the foreign key's own UPDATE would be refused by the
+              // append-only trigger, guard or no guard.
+              { detachLinksToUsersOf: me.companyId },
+            );
           });
           await step('userRoles', async () => {
             const { count } = await tx.userRole.deleteMany({

@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 
+import { AUDIT_PURGE_SETTING, AuditPurgeService } from '../../common/audit/audit-purge.service';
 import { AuthUser } from '../../common/decorators/current-user.decorator';
 import { ResetService } from './reset.service';
 
@@ -25,6 +26,9 @@ describe('ResetService', () => {
   let deletions: string[];
   let companyUpdates: unknown[];
   let auditRecords: Array<Record<string, unknown>>;
+  let purgeSessions: string[];
+  let purgeRecords: Array<Record<string, unknown>>;
+  let linkStatements: string[];
   let failOn: string | null;
 
   /// The models the reset clears, and the order it clears them in.
@@ -51,6 +55,20 @@ describe('ResetService', () => {
     const tx: Record<string, unknown> = {
       $queryRaw: async () => [{ id: 'x' }],
       $executeRaw: async () => 1,
+      // What the purge helper uses to announce the purge to this transaction
+      // and to put the guard back on straight afterwards.
+      $queryRawUnsafe: async (sql: string) => {
+        const match = /set_config\('([^']+)', '(on|off)'/.exec(sql);
+        if (match) purgeSessions.push(`${match[2]}`);
+        return [{ set_config: 'ok' }];
+      },
+      // Clearing the trail's links to the people who are about to be deleted:
+      // the rows are copied aside, deleted and written back without the link,
+      // because the database refuses every UPDATE on that table.
+      $executeRawUnsafe: async (sql: string) => {
+        linkStatements.push(sql.replace(/\s+/g, ' ').trim());
+        return sql.trimStart().startsWith('DELETE FROM audit_logs') ? 2 : 0;
+      },
       company: {
         update: async (args: unknown) => {
           companyUpdates.push(args);
@@ -64,6 +82,10 @@ describe('ResetService', () => {
           if (failOn === model) throw new Error(`${model} failed`);
           deletions.push(model);
           return { count: 1 };
+        },
+        create: async (args: { data: Record<string, unknown> }) => {
+          purgeRecords.push(args.data);
+          return args.data;
         },
       };
     }
@@ -176,6 +198,7 @@ describe('ResetService', () => {
     return new ResetService(
       prisma(options.user ?? {}) as never,
       audit as never,
+      new AuditPurgeService(),
       maintenance() as never,
       (options.backups ?? backups()) as never,
       (options.companyBackups ?? mockCompanyBackups()) as never,
@@ -214,6 +237,9 @@ describe('ResetService', () => {
     deletions = [];
     companyUpdates = [];
     auditRecords = [];
+    purgeSessions = [];
+    purgeRecords = [];
+    linkStatements = [];
     failOn = null;
     jest.mocked(argon2.verify).mockReset();
     jest.mocked(argon2.verify).mockResolvedValue(true);
@@ -288,6 +314,56 @@ describe('ResetService', () => {
     expect(entry.entity).toBe('company_data');
     expect(JSON.stringify(entry)).not.toContain('super secret');
     expect(JSON.stringify(entry)).toContain('kayan-full-1.dump');
+  });
+
+  it('purges the trail through the guard, and puts the guard back on', async () => {
+    await service().reset(admin(), 'pw', 'RESET');
+    // The database refuses to delete audit rows unless the transaction has
+    // announced itself as a purge: on first, off immediately after.
+    expect(purgeSessions).toEqual(['on', 'off']);
+    expect(purgeSessions.filter((value) => value === 'off')).toHaveLength(1);
+  });
+
+  it('clears the trail’s links to the people it is about to delete, before they go', async () => {
+    await service().reset(admin(), 'pw', 'RESET');
+
+    // Three statements, in this order: copy the affected rows aside, delete
+    // them under the guard, write them back with the same id and timestamp and
+    // without the link. An UPDATE is impossible: the database refuses every
+    // one of them, guard or no guard.
+    expect(linkStatements).toHaveLength(3);
+    expect(linkStatements[0]).toMatch(/^CREATE TEMP TABLE .* AS SELECT .* FROM audit_logs/);
+    expect(linkStatements[1]).toMatch(/^DELETE FROM audit_logs WHERE "userId" IN/);
+    expect(linkStatements[2]).toMatch(/^INSERT INTO audit_logs .*SELECT id, "companyId", NULL/);
+
+    // Rows of the company being wiped are left to the purge itself, which
+    // deletes them a moment later.
+    expect(linkStatements[0]).toContain(`"companyId" IS DISTINCT FROM $2::uuid`);
+    expect(linkStatements[0]).toContain(`"companyId" = $1::uuid`);
+
+    // The people are deleted after the links are cleared, not before: that
+    // order is the whole point.
+    expect(deletions.indexOf('user')).toBeGreaterThan(deletions.indexOf('auditLog'));
+    expect(purgeSessions).toEqual(['on', 'off']);
+
+    // And the purge says how many rows had their link cleared.
+    expect((purgeRecords[0]!.afterJson as Record<string, unknown>).detachedLinksToUsers).toBe(2);
+  });
+
+  it('leaves a record of the purge, naming the operation and the administrator', async () => {
+    await service().reset(admin(), 'pw', 'RESET');
+    expect(purgeRecords).toHaveLength(1);
+    const record = purgeRecords[0]!;
+    expect(record.action).toBe('AUDIT_PURGED');
+    expect(record.entity).toBe('audit_logs');
+    expect(record.companyId).toBe(COMPANY_ID);
+    expect(record.userId).toBe(USER_ID);
+    expect((record.afterJson as Record<string, unknown>).reason).toBe(
+      'company-data-reset',
+    );
+    // The guard's own name never appears in the record; what appears is the
+    // operation a person can read.
+    expect(JSON.stringify(record)).not.toContain(AUDIT_PURGE_SETTING);
   });
 
   it('does not reset when the backup cannot be taken', async () => {

@@ -61,18 +61,26 @@ export class SetupService {
      * Housekeeping first: a dormant company nobody belongs to is swept away,
      * so repeated resets do not pile up empty shells. Whatever is left — at
      * most one company with people in it — is the one this setup revives.
+     *
+     * A shell that still has history in its name is left alone: deleting its
+     * row would make PostgreSQL try to clear the company on its audit rows
+     * (`ON DELETE SET NULL`), and the append-only trigger refuses every UPDATE
+     * — including that one. Keeping the row keeps its trail readable and costs
+     * nothing but a line in the list.
      */
     const dormant = await this.prisma.company.findMany({
       where: { deletedAt: { not: null } },
       select: {
         id: true,
         code: true,
-        _count: { select: { users: true } },
+        _count: { select: { users: true, auditLogs: true } },
       },
       orderBy: { createdAt: 'asc' },
     });
 
-    const empty = dormant.filter((company) => company._count.users === 0);
+    const empty = dormant.filter(
+      (company) => company._count.users === 0 && company._count.auditLogs === 0,
+    );
     if (empty.length > 0) {
       await this.prisma.company.deleteMany({
         where: { id: { in: empty.map((company) => company.id) } },
@@ -207,10 +215,16 @@ export class SetupService {
               },
             });
 
-      // Only one administrator belongs at the beginning of a company.
+      // Only one administrator belongs at the beginning of a company. The
+      // extra accounts are switched off and retired rather than deleted: an
+      // account the audit trail mentions cannot be removed without the trail's
+      // foreign key trying to edit history, which the database refuses — and a
+      // retired account is out of every list, every role and every sign-in
+      // anyway (`deletedAt` and `isActive` are checked at login).
       if (already.length > 1) {
-        await tx.user.deleteMany({
-          where: { companyId: company.id, id: { not: admin.id } },
+        await tx.user.updateMany({
+          where: { companyId: company.id, id: { not: admin.id }, deletedAt: null },
+          data: { isActive: false, deletedAt: new Date() },
         });
       }
 

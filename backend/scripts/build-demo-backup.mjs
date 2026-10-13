@@ -184,6 +184,27 @@ async function waitForApi(base, attempts = 90) {
   return false;
 }
 
+/// The last few lines a server wrote, for a failure message that explains
+/// itself. Errors travel in the log long before anybody reads a stack trace.
+function serverLogTail(log, lines = 12) {
+  const text = String(log ?? '').trim();
+  if (!text) return '(the server wrote nothing)';
+  const clean = text
+    .split('\n')
+    .map((line) => line.replace(/\u001b\[[0-9;]*m/g, '').trimEnd())
+    .filter((line) => line.trim().length > 0);
+  // The sentence that says what went wrong, then the last few lines for
+  // context: a stack trace without its first line explains nothing.
+  const headlines = clean
+    .filter((line) =>
+      /(Error|Exception|refus|append-only|denied|could not|violates)/i.test(line),
+    )
+    .slice(0, 4);
+  const kept = clean.slice(-lines);
+  const parts = [...headlines, ...kept.filter((line) => !headlines.includes(line))];
+  return '\n    ' + parts.join('\n    ');
+}
+
 function startApi(port, databaseUrl, backupDir) {
   const child = spawn(
     process.execPath,
@@ -472,7 +493,12 @@ async function main() {
       'the company JSON backup restores cleanly through the company restore route',
       (jsonRestoreRes.status === 200 || jsonRestoreRes.status === 201) &&
         jsonRestoreBody?.companyId != null,
-      `HTTP ${jsonRestoreRes.status}, total written=${jsonRestoreBody?.total ?? 0}`,
+      `HTTP ${jsonRestoreRes.status}, total written=${jsonRestoreBody?.total ?? 0}` +
+        // The server's own account of the failure, so a red run says why
+        // instead of only that it was red. The log carries no secrets.
+        (jsonRestoreRes.status >= 400
+          ? `\n  server said: ${serverLogTail(restore.log())}`
+          : ''),
     );
 
     const demoLoginAfterJson = await loginAs(restoreBase);

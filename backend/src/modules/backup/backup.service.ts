@@ -1,5 +1,11 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 
+import { Prisma } from '@prisma/client';
+
+import {
+  AuditPurgeRequest,
+  AuditPurgeService,
+} from '../../common/audit/audit-purge.service';
 import { AuditService } from '../../common/audit/audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
@@ -19,6 +25,15 @@ export interface BackupFile {
   tables: Record<string, Array<Record<string, unknown>>>;
 }
 
+/// Who asked for the restore and what they agreed to. The identity travels
+/// into the transaction so the audit trail names a person, not an event.
+export interface RestoreOptions {
+  replace: boolean;
+  actorUserId?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}
+
 export interface RestoreSummary {
   companyId: string;
   companyName: string;
@@ -27,6 +42,16 @@ export interface RestoreSummary {
   written: Record<string, number>;
   total: number;
 }
+
+/// The database client a restore writes through.
+///
+/// Reads and the pre-flight counts use the root client; everything a restore
+/// deletes or inserts goes through the transaction's own client, so the whole
+/// restore is one unit of work. Using the root client inside the transaction —
+/// which is what this file used to do — sends each statement to a different
+/// connection from the pool, and a failure half way then leaves a company that
+/// is neither the old one nor the new one.
+type RestoreClient = Prisma.TransactionClient | PrismaService;
 
 /// One table in the backup.
 ///
@@ -128,6 +153,9 @@ export class BackupService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    /// The one place that is allowed to remove audit rows, and only inside the
+    /// caller's transaction, with a reason, and never silently.
+    private readonly purge: AuditPurgeService,
   ) {}
 
   /// ───────────────────────────────────────────────────────── taking one
@@ -142,7 +170,7 @@ export class BackupService {
     const counts: Record<string, number> = {};
 
     for (const spec of TABLES) {
-      const rows = await this.readTable(spec, companyId);
+      const rows = await this.readTable(this.prisma, spec, companyId);
       tables[spec.model] = rows;
       // A count of zero is noise on the screen and in the file.
       if (rows.length > 0) counts[spec.model] = rows.length;
@@ -160,17 +188,21 @@ export class BackupService {
     };
   }
 
-  private delegate(model: string): Record<string, any> {
+  private delegate(
+    client: RestoreClient,
+    model: string,
+  ): Record<string, any> {
     // Looked up by name so the whole backup is one table list rather than
     // twenty near-identical blocks. Every name in TABLES is a real model.
-    return (this.prisma as unknown as Record<string, Record<string, any>>)[model];
+    return (client as unknown as Record<string, Record<string, any>>)[model];
   }
 
   private async readTable(
+    client: RestoreClient,
     spec: TableSpec,
     companyId: string,
   ): Promise<Array<Record<string, unknown>>> {
-    const delegate = this.delegate(spec.model);
+    const delegate = this.delegate(client, spec.model);
     if (!delegate?.findMany) return [];
 
     if (spec.scope === 'company') {
@@ -180,7 +212,7 @@ export class BackupService {
     }
 
     // A child table is reached through its parent's ids.
-    const parent = this.delegate(spec.parent as string);
+    const parent = this.delegate(client, spec.parent as string);
     const parents = (await parent.findMany({
       where: { companyId },
       select: { id: true },
@@ -202,7 +234,7 @@ export class BackupService {
   async restore(
     file: BackupFile,
     requesterCompanyId: string,
-    options: { replace: boolean },
+    options: RestoreOptions,
   ): Promise<RestoreSummary> {
     this.validate(file);
 
@@ -237,24 +269,93 @@ export class BackupService {
     }
 
     const written: Record<string, number> = {};
+    /// Rows the purge removed, reported by the record written at the end.
+    let removedTrailRows = 0;
 
     // One transaction: a restore that stops half way would leave a company that
     // is neither the old one nor the new one.
     await this.prisma.$transaction(
-      async () => {
+      async (tx) => {
         // Everything is cleared first, children before parents. An empty
         // company has nothing to clear and the same code runs anyway, so the
         // two paths are the same path.
-        for (const spec of [...TABLES].reverse()) {
-          await this.deleteTable(spec, requesterCompanyId);
+        // The audit trail is append-only in the database, so removing a
+        // company's history needs the one service that is allowed to announce
+        // a purge. The guard covers the whole clearing phase rather than the
+        // single DELETE: deleting a user makes PostgreSQL itself try to clear
+        // that user's `audit_logs.userId` references, and the trigger refuses
+        // an UPDATE just as firmly as a DELETE — with or without the guard, by
+        // design, because history is not editable. Those references are cleared
+        // up front instead (see `detachUserLinks`), the guard goes back on
+        // before anything is written, and the purge is recorded inside this
+        // transaction.
+        let purgeRequest: AuditPurgeRequest;
+        await this.purge.openGuard(tx);
+        try {
+          // Rows that are not this company's but name one of its users survive
+          // this restore; they lose the link to a person who is about to be
+          // deleted, exactly as the foreign key intended.
+          const detached = await this.purge.detachUserLinks(tx, requesterCompanyId, {
+            keepCompanyId: requesterCompanyId,
+          });
+
+          purgeRequest = {
+            companyId: requesterCompanyId,
+            reason: 'company-json-restore',
+            actorUserId: options.actorUserId ?? null,
+            ipAddress: options.ipAddress ?? null,
+            userAgent: options.userAgent ?? null,
+            detail: {
+              fileCompanyCode: file.companyCode,
+              detachedLinksToUsers: detached,
+            },
+          };
+
+          for (const spec of [...TABLES].reverse()) {
+            if (spec.model === 'auditLog') {
+              // Without the record for now: it names the administrator, and
+              // the administrator's account is deleted further down this same
+              // phase and put back from the file. See `recordPurge` below.
+              removedTrailRows = await this.purge.removeTrail(tx, purgeRequest, {
+                record: false,
+              });
+              continue;
+            }
+            await this.deleteTable(tx, spec, requesterCompanyId);
+          }
+        } finally {
+          await this.purge.closeGuard(tx);
         }
 
         for (const spec of TABLES) {
           const rows = (file.tables[spec.model] ?? []).filter(isRow);
           if (rows.length === 0) continue;
-          await this.insertTable(spec, rows, requesterCompanyId);
+          await this.insertTable(tx, spec, rows, requesterCompanyId);
           written[spec.model] = rows.length;
         }
+
+        // The purge is recorded now that the accounts are back, and what was
+        // put back is written right after it. Both live where the restore
+        // itself cannot erase them: inside the same transaction, after the
+        // file's rows are in.
+        await this.purge.recordPurge(tx, purgeRequest, removedTrailRows);
+        await tx.auditLog.create({
+          data: {
+            companyId: requesterCompanyId,
+            // The administrator may be one of the accounts the file replaced.
+            userId: await this.purge.actorUserIdFor(tx, options.actorUserId),
+            action: hasData ? 'RESTORE_REPLACE' : 'RESTORE',
+            entity: 'company_json_backup',
+            entityId: requesterCompanyId,
+            ipAddress: options.ipAddress ?? null,
+            userAgent: options.userAgent ?? null,
+            afterJson: {
+              fileCreatedAt: file.createdAt,
+              companyCode: file.companyCode,
+              written,
+            } as never,
+          },
+        });
       },
       // A large restore legitimately takes longer than the default.
       { timeout: 300_000, maxWait: 30_000 },
@@ -315,23 +416,27 @@ export class BackupService {
   private async countExisting(companyId: string): Promise<Record<string, number>> {
     const counts: Record<string, number> = {};
     for (const spec of TABLES) {
-      const rows = await this.readTable(spec, companyId);
+      const rows = await this.readTable(this.prisma, spec, companyId);
       if (rows.length > 0) counts[spec.model] = rows.length;
     }
     return counts;
   }
 
-  private async deleteTable(spec: TableSpec, companyId: string): Promise<void> {
-    const delegate = this.delegate(spec.model);
+  private async deleteTable(
+    client: RestoreClient,
+    spec: TableSpec,
+    companyId: string,
+  ): Promise<void> {
+    const delegate = this.delegate(client, spec.model);
     if (!delegate?.deleteMany) return;
 
     if (spec.model === 'account') {
-      await (this.prisma as any).account.updateMany({
+      await (client as any).account.updateMany({
         where: { companyId },
         data: { parentId: null },
       }).catch(() => {});
     } else if (spec.model === 'branch') {
-      await (this.prisma as any).branch.updateMany({
+      await (client as any).branch.updateMany({
         where: { companyId },
         data: { parentBranchId: null },
       }).catch(() => {});
@@ -342,7 +447,7 @@ export class BackupService {
       return;
     }
 
-    const parent = this.delegate(spec.parent as string);
+    const parent = this.delegate(client, spec.parent as string);
     const parents = (await parent.findMany({
       where: { companyId },
       select: { id: true },
@@ -354,11 +459,12 @@ export class BackupService {
   }
 
   private async insertTable(
+    client: RestoreClient,
     spec: TableSpec,
     rows: Array<Record<string, unknown>>,
     companyId: string,
   ): Promise<void> {
-    const delegate = this.delegate(spec.model);
+    const delegate = this.delegate(client, spec.model);
     if (!delegate?.createMany) return;
 
     // Two fixes before writing. A company table gets its companyId back (the
@@ -377,9 +483,9 @@ export class BackupService {
 
     if (
       spec.model === 'rolePermission' &&
-      typeof (this.prisma as any).permission?.findMany === 'function'
+      typeof (client as any).permission?.findMany === 'function'
     ) {
-      const targetPerms = (await (this.prisma as any).permission.findMany()) as Array<{
+      const targetPerms = (await (client as any).permission.findMany()) as Array<{
         id: string;
         code: string;
       }>;
