@@ -12,6 +12,6 @@ import { ReportsService } from './reports.service';
   providers: [ReportsService, FinancialStatementsService, AgingService],
   // The exporter renders the same numbers as files, so it reads the same
   // service rather than re-deriving them.
-  exports: [ReportsService],
+  exports: [ReportsService, FinancialStatementsService, AgingService],
 })
 export class ReportsModule {}

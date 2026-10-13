@@ -39,6 +39,7 @@ export class UsersService {
         userRoles: {
           include: { role: { select: { id: true, code: true, nameEn: true } } },
         },
+        userPermissions: { include: { permission: true } },
         branches: { include: { branch: true } },
       },
     });
@@ -52,6 +53,7 @@ export class UsersService {
         userRoles: {
           include: { role: { select: { id: true, code: true, nameEn: true } } },
         },
+        userPermissions: { include: { permission: true } },
         branches: { include: { branch: true } },
       },
     });
@@ -88,6 +90,7 @@ export class UsersService {
       });
       await this.replaceRoles(tx, companyId, user.id, dto.roleIds);
       await this.replaceBranches(tx, user.id, dto.branchIds);
+      await this.replaceExtraPermissions(tx, user.id, dto.extraPermissions);
       return user;
     });
 
@@ -127,6 +130,7 @@ export class UsersService {
       });
       if (dto.roleIds) await this.replaceRoles(tx, companyId, id, dto.roleIds);
       if (dto.branchIds) await this.replaceBranches(tx, id, dto.branchIds);
+      if (dto.extraPermissions) await this.replaceExtraPermissions(tx, id, dto.extraPermissions);
     });
 
     await this.audit.record({
@@ -230,6 +234,28 @@ export class UsersService {
     }
   }
 
+  private async replaceExtraPermissions(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    codes?: string[],
+  ) {
+    if (!codes) return;
+    const unique = [...new Set(codes.map((c) => c.trim()).filter(Boolean))];
+    const found = unique.length
+      ? await tx.permission.findMany({ where: { code: { in: unique } } })
+      : [];
+    if (found.length !== unique.length) {
+      const known = new Set(found.map((p) => p.code));
+      throw new BadRequestException(
+        `Unknown permission(s): ${unique.filter((c) => !known.has(c)).join(', ')}`,
+      );
+    }
+    await tx.userPermission.deleteMany({ where: { userId } });
+    for (const permission of found) {
+      await tx.userPermission.create({ data: { userId, permissionId: permission.id } });
+    }
+  }
+
   private async replaceBranches(
     tx: Prisma.TransactionClient,
     userId: string,
@@ -281,6 +307,7 @@ export class UsersService {
       isSuperAdmin: user.isSuperAdmin,
       lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
       lockedUntil: user.lockedUntil?.toISOString() ?? null,
+      extraPermissions: (user.userPermissions ?? []).map((up: any) => up.permission.code),
       roles: (user.userRoles ?? []).map((ur: any) => ({
         id: ur.role.id,
         code: ur.role.code,

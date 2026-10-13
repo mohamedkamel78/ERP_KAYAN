@@ -1490,6 +1490,12 @@ abstract class AppLocalizations {
   /// **'Edit permissions'**
   String get setPermissions;
 
+  String get selectAll;
+
+  String get clearAll;
+
+  String get extraPermissions;
+
   /// No description provided for @permissionsNote.
   ///
   /// In en, this message translates to:

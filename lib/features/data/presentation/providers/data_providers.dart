@@ -188,6 +188,50 @@ class ReportLinkBuilder {
     return '$_base/exports/lists/$list/print?${_encode(query)}';
   }
 
+  Future<DownloadRequest> documentFile({
+    required String kind,
+    required String id,
+    required String format,
+    required String language,
+  }) async {
+    final query = <String, String>{
+      'format': format,
+      'lang': language,
+      'ticket': await _downloadTicket(),
+    };
+    return DownloadRequest(
+      url: '$_base/exports/documents/$kind/$id/download?${_encode(query)}',
+    );
+  }
+
+  Future<DownloadRequest> documentPdf({
+    required String kind,
+    required String id,
+    required String language,
+  }) async {
+    final query = <String, String>{
+      'lang': language,
+      'ticket': await _downloadTicket(),
+    };
+    return DownloadRequest(
+      url: '$_base/exports/documents/$kind/$id/pdf?${_encode(query)}',
+    );
+  }
+
+  Future<String> documentPrint({
+    required String kind,
+    required String id,
+    required String language,
+    bool auto = true,
+  }) async {
+    final query = <String, String>{
+      'lang': language,
+      if (auto) 'auto': '1',
+      'ticket': await _downloadTicket(),
+    };
+    return '$_base/exports/documents/$kind/$id/print?${_encode(query)}';
+  }
+
   /// A blank spreadsheet to fill in, for one kind of import.
   Future<DownloadRequest> importTemplate({
     required String kind,

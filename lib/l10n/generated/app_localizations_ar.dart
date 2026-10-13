@@ -715,6 +715,15 @@ class AppLocalizationsAr extends AppLocalizations {
   String get setPermissions => 'تعديل الصلاحيات';
 
   @override
+  String get selectAll => 'تحديد الكل';
+
+  @override
+  String get clearAll => 'إلغاء الكل';
+
+  @override
+  String get extraPermissions => 'صلاحيات إضافية';
+
+  @override
   String get permissionsNote =>
       'دور نظامي: تقدر تعدّل صلاحياته، لكن مش ينفع تسمّيه من جديد ولا تحذفه.';
 

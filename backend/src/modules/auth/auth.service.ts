@@ -21,6 +21,20 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
 
+function collectPermissions(user: {
+  userRoles: Array<{ role: { rolePermissions: Array<{ permission: { code: string } }> } }>;
+  userPermissions?: Array<{ permission: { code: string } }>;
+}): string[] {
+  return [
+    ...new Set([
+      ...user.userRoles.flatMap((ur) =>
+        ur.role.rolePermissions.map((rp) => rp.permission.code),
+      ),
+      ...(user.userPermissions ?? []).map((up) => up.permission.code),
+    ]),
+  ];
+}
+
 export interface SessionUser {
   id: string;
   username: string;
@@ -61,6 +75,7 @@ export class AuthService {
             role: { include: { rolePermissions: { include: { permission: true } } } },
           },
         },
+        userPermissions: { include: { permission: true } },
       },
     });
 
@@ -110,13 +125,7 @@ export class AuthService {
       throw invalid;
     }
 
-    const permissions = [
-      ...new Set(
-        user.userRoles.flatMap((ur) =>
-          ur.role.rolePermissions.map((rp) => rp.permission.code),
-        ),
-      ),
-    ];
+    const permissions = collectPermissions(user);
     const roles = [...new Set(user.userRoles.map((ur) => ur.role.code))];
 
     const branches = await this.prisma.userBranch.findMany({
@@ -210,6 +219,7 @@ export class AuthService {
               },
             },
             branches: true,
+            userPermissions: { include: { permission: true } },
           },
         },
       },
@@ -227,13 +237,7 @@ export class AuthService {
     });
 
     const user = stored.user;
-    const permissions = [
-      ...new Set(
-        user.userRoles.flatMap((ur) =>
-          ur.role.rolePermissions.map((rp) => rp.permission.code),
-        ),
-      ),
-    ];
+    const permissions = collectPermissions(user);
     const roles = [...new Set(user.userRoles.map((ur) => ur.role.code))];
     const branchId = user.branches[0]?.branchId ?? null;
 

@@ -718,6 +718,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get setPermissions => 'Edit permissions';
 
   @override
+  String get selectAll => 'Select all';
+
+  @override
+  String get clearAll => 'Clear all';
+
+  @override
+  String get extraPermissions => 'Extra permissions';
+
+  @override
   String get permissionsNote =>
       'A built-in role: its permissions can be changed, but it cannot be renamed or removed.';
 

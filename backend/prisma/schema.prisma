@@ -160,6 +160,7 @@ model User {
 
   company      Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
   userRoles    UserRole[]
+  userPermissions UserPermission[]
   branches     UserBranch[]
   refreshToken RefreshToken[]
   auditLogs    AuditLog[]
@@ -196,8 +197,21 @@ model Permission {
   nameAr   String
   module   String
   rolePermissions RolePermission[]
+  userPermissions UserPermission[]
 
   @@map("permissions")
+}
+
+/// Extra permissions granted to one user on top of their roles.
+model UserPermission {
+  userId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, permissionId])
+  @@map("user_permissions")
 }
 
 model RolePermission {
