@@ -3,25 +3,25 @@
 ; This file is data, not a program: the Inno Setup compiler (ISCC) reads it and
 ; produces the single file a customer runs:
 ;
-;     KAYAN-ERP-Setup-<version>.exe
+;     KAYAN-Setup.exe
 ;
 ; The customer double-clicks that file, sees the usual Windows installer, and
-; ends up with ERP_KAYAN in the Start menu. Nothing else is installed, nothing
-; is downloaded, and no Node.js, Flutter, Git or terminal is involved.
+; ends up with KAYAN ERP in the Start menu. The installer configures the
+; dedicated local PostgreSQL service and protected settings automatically.
+; No separate Node.js, Flutter, Git, npm or terminal is needed.
 ;
 ; It packs the folder that scripts\build-desktop-windows.ps1 has already
 ; assembled (build\desktop\KAYAN-ERP), so the two steps stay separate: the build
 ; script decides WHAT ships, this file decides how it is installed.
 ;
-; Inno Setup is free, is the standard for this job, and leaves no runtime
-; dependency behind. The build script runs ISCC automatically when it is
-; installed, and simply skips the installer when it is not.
+; Inno Setup creates one self-contained customer installer. The build fails if
+; ISCC is missing rather than silently producing a package without Setup.
 
 #define AppName "KAYAN ERP"
 #define AppShortName "ERP_KAYAN"
 #define AppExe "erp_kayan.exe"
-#define AppVersion "1.0.0"
-#define AppPublisher "KAYAN"
+#define AppVersion "1.0.1"
+#define AppPublisher "KAYAN Integrated Solutions"
 ; Both are passed in by scripts\build-desktop-windows.ps1, so a custom -Output
 ; folder stays in step. The values below are used when ISCC is run by hand.
 #ifndef SourceDir
@@ -40,7 +40,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=KAYAN-ERP-Setup-{#AppVersion}
+OutputBaseFilename=KAYAN-Setup
 ; The KAYAN logo (Kayan.png at the repository root, rendered by
 ; tools\generate_icons.py) is the icon of the Setup file itself — the first
 ; thing a customer sees. The path is relative to this script, so it works on
@@ -54,11 +54,11 @@ UseSetupLdr=x64
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 ; The program itself needs no administrator rights to run; installing under
-; Program Files is what needs them. Everything the program writes at run time
-; goes to %APPDATA%, so the installation folder stays read-only and safe.
+; Program Files is what needs them. Protected DB settings live in ProgramData;
+; logs and user backup files live in %APPDATA%, so the app folder stays read-only.
 PrivilegesRequired=admin
-; A plain uninstall: the program's settings and logs in %APPDATA% are data, and
-; are left alone. The README says where they are.
+; PostgreSQL runtime, service, company data and protected settings live in ProgramData.
+; Uninstall only removes the app/firewall rule; it must not unregister the database.
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -90,8 +90,33 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\icons\app_icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "netsh.exe"; Parameters: "advfirewall firewall add rule name=""KAYAN ERP Server"" dir=in action=allow protocol=TCP localport=3000 profile=private,domain"; Flags: runhidden; StatusMsg: "Configuring Windows Firewall for local network access..."
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+
+[UninstallRun]
+; Unregister the service before its executable is removed. The script preserves
+; %ProgramData%\KAYAN-ERP\pgdata and the protected runtime configuration.
+Filename: "netsh.exe"; Parameters: "advfirewall firewall delete rule name=""KAYAN ERP Server"""; Flags: runhidden
 
 [UninstallDelete]
-; Only the empty folder itself; the client's data stays in %APPDATA% on purpose.
+; Only the empty app folder itself. Company data stays in ProgramData on purpose.
 Type: dirifempty; Name: "{app}"
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  ScriptPath, Params: string;
+begin
+  if CurStep = ssPostInstall then
+  begin
+    ScriptPath := ExpandConstant('{app}\backend\scripts\install-kayan-database.ps1');
+    Params := '-ExecutionPolicy Bypass -NoProfile -File "' + ScriptPath +
+      '" -AppDir "' + ExpandConstant('{app}') + '"';
+    if not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      RaiseException('Could not start KAYAN database provisioning.');
+    if ResultCode <> 0 then
+      RaiseException('KAYAN database provisioning failed. See %ProgramData%\KAYAN-ERP\installer-db-setup-error.log.');
+  end;
+end;

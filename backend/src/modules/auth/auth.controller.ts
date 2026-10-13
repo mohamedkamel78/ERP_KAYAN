@@ -33,6 +33,24 @@ export class AuthController {
     return this.auth.refresh(dto.refreshToken);
   }
 
+  /**
+   * A one-minute credential for one address: a print page or a file.
+   *
+   * The screen asks for one just before it hands a URL to the browser, so
+   * the sign-in token never appears in a history entry or a log.
+   */
+  @Post('download-ticket')
+  downloadTicket(@CurrentUser() user: AuthUser) {
+    return this.auth.issueDownloadTicket({
+      id: user.userId,
+      username: user.username,
+      companyId: user.companyId,
+      branchId: user.branchId,
+      isSuperAdmin: user.isSuperAdmin,
+      permissions: user.permissions ?? [],
+    });
+  }
+
   @Post('logout')
   async logout(
     @CurrentUser() user: AuthUser,
@@ -78,6 +96,7 @@ export class AuthController {
         roles,
         permissions,
         isActive: record.isActive,
+        isSuperAdmin: record.isSuperAdmin,
       },
     };
   }

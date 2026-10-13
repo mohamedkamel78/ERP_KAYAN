@@ -79,21 +79,35 @@ class AppConfig {
     };
 
     String resolvedBaseUrl = _baseUrl;
+    const hasCustomUrl = bool.hasEnvironment('API_BASE_URL');
     if (kIsWeb) {
-      // When running on the web, if no explicit API_BASE_URL was passed at compile time,
-      // derive the API URL dynamically from the browser's origin so that access via LAN IP
-      // or domain hits the right server.
-      const hasCustomUrl = bool.hasEnvironment('API_BASE_URL');
-      if (!hasCustomUrl) {
-        if (Uri.base.scheme.startsWith('http')) {
-          final origin = Uri.base.origin;
-          if (Uri.base.host != 'localhost' && Uri.base.host != '127.0.0.1') {
+      if (_baseUrl.startsWith('/') && Uri.base.scheme.startsWith('http')) {
+        resolvedBaseUrl = '${Uri.base.origin}$_baseUrl';
+      } else if (!hasCustomUrl && Uri.base.scheme.startsWith('http')) {
+        // When running on the web, if no explicit API_BASE_URL was passed at compile time,
+        // derive the API URL dynamically from the browser's origin so that access via LAN IP
+        // or domain hits the right server.
+        final host = Uri.base.host;
+        final origin = Uri.base.origin;
+        if (host != 'localhost' && host != '127.0.0.1') {
+          if (Uri.base.port == 3000 ||
+              Uri.base.port == 80 ||
+              Uri.base.port == 443 ||
+              !Uri.base.hasPort) {
             resolvedBaseUrl = '$origin/api/v1';
-          } else if (Uri.base.port == 3000) {
-            resolvedBaseUrl = '$origin/api/v1';
+          } else {
+            final scheme = Uri.base.scheme;
+            resolvedBaseUrl = '$scheme://$host:3000/api/v1';
           }
+        } else if (Uri.base.port == 3000) {
+          resolvedBaseUrl = '$origin/api/v1';
         }
       }
+    } else if (!hasCustomUrl) {
+      // On desktop/native platforms, bind loopback requests explicitly to IPv4
+      // 127.0.0.1 rather than `localhost`, which on Windows resolves to IPv6
+      // `::1` first while the local NestJS server binds IPv4 `0.0.0.0`.
+      resolvedBaseUrl = 'http://127.0.0.1:3000/api/v1';
     }
 
     return AppConfig(

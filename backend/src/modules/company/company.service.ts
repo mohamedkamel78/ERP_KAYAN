@@ -73,6 +73,7 @@ export class CompanyService {
       address: company.address,
       hasLogo: (company.logoData?.length ?? 0) > 0,
       logoMime: company.logoData ? company.logoMime : null,
+      logoBase64: company.logoData ? Buffer.from(company.logoData).toString('base64') : null,
       isActive: company.isActive,
     };
   }
@@ -243,17 +244,36 @@ export class CompanyService {
       dto.parentBranchId ?? null,
     );
 
-    const created = await this.prisma.branch.create({
-      data: {
-        companyId,
-        code: dto.code,
-        nameEn: dto.nameEn,
-        nameAr: dto.nameAr,
-        kind,
-        parentBranchId,
-        createdBy: userId,
-        updatedBy: userId,
-      },
+    const created = await this.prisma.$transaction(async (tx) => {
+      const branch = await tx.branch.create({
+        data: {
+          companyId,
+          code: dto.code,
+          nameEn: dto.nameEn,
+          nameAr: dto.nameAr,
+          kind,
+          parentBranchId,
+          createdBy: userId,
+          updatedBy: userId,
+        },
+      });
+
+      // Every branch can hold stock, so every branch arrives with the one
+      // warehouse that makes "where are these goods?" answerable from its
+      // first day rather than its first document.
+      await tx.warehouse.create({
+        data: {
+          companyId,
+          branchId: branch.id,
+          code: `${branch.code}-MAIN`,
+          nameEn: `${branch.nameEn} main store`,
+          nameAr: `${branch.nameAr} - المخزن الرئيسي`,
+          isDefault: true,
+          createdBy: userId,
+        },
+      });
+
+      return branch;
     });
 
     await this.audit.record({

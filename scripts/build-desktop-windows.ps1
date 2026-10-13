@@ -4,7 +4,7 @@
   API server, with no terminal, no Node on PATH and no commands to type.
 
 .DESCRIPTION
-  The result is a folder (and a .zip beside it) shaped like this:
+  The result is a folder shaped like this:
 
       KAYAN-ERP\
         erp_kayan.exe                 the program
@@ -15,10 +15,9 @@
         backend\scripts\              database preparation
         backend\node\node.exe         a Node runtime that ships with the app
 
-  Beside the folder it also produces KAYAN-ERP-windows.zip, and - when Inno
-  Setup is installed on this machine - KAYAN-ERP-Setup-<version>.exe, the single
-  file a customer double-clicks. Only the build machine needs Flutter, Node and
-  (optionally) Inno Setup.
+  The only customer deliverable is KAYAN-Setup.exe. The assembled folder is
+  an intermediate build input and is not published as a ZIP. Only the build
+  machine needs Flutter, Node and Inno Setup.
 
   Run this from the repository root, on a Windows machine, with Flutter and
   Node installed for *building* (the end user needs neither).
@@ -27,7 +26,7 @@
   Where to assemble. Default: build\desktop
 
 .PARAMETER SkipZip
-  Skip producing the .zip (assembly only).
+  Do not create a ZIP; the only supported deliverable is the installer.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1
@@ -116,6 +115,11 @@ New-Item -ItemType Directory -Force -Path $backendFolder | Out-Null
 Copy-Item (Join-Path $backendSource "dist") $backendFolder -Recurse
 Copy-Item (Join-Path $backendSource "prisma") $backendFolder -Recurse
 Copy-Item (Join-Path $backendSource "scripts") $backendFolder -Recurse
+# The installer invokes the root-level PostgreSQL manager from the staged
+# backend scripts directory; the backend source scripts do not include it.
+$stagedScripts = Join-Path $backendFolder "scripts"
+Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $stagedScripts "manage-kayan-db.ps1") -Force
+Copy-Item (Join-Path $root "scripts\install-kayan-database.ps1") (Join-Path $stagedScripts "install-kayan-database.ps1") -Force
 Copy-Item (Join-Path $backendSource "package.json") $backendFolder
 Copy-Item (Join-Path $backendSource "package-lock.json") $backendFolder
 Copy-Item (Join-Path $backendSource ".env.production.example") $backendFolder
@@ -221,53 +225,114 @@ Step "5/8" "Bundling the PostgreSQL backup tools (pg_dump / pg_restore)"
 # supports. The copy is made from, in order of preference:
 #   1. the portable PostgreSQL that scripts\install-postgres-portable.bat
 #      provisions (the same one the program's own database runs on);
-#   2. a PostgreSQL installed on this build machine, newest first.
+#   2. a PostgreSQL installed on this build machine, newest first;
+#   3. failing both, this script provisions the same portable toolchain the
+#      installer script uses - the same download, the same folder - so a
+#      fresh build machine (including CI) can always produce a package.
 # Only the two programs and the DLLs they need are copied. Nothing is
-# installed, nothing existing is replaced, and no PostgreSQL setting is read
-# or changed. PostgreSQL's licence allows distributing these binaries with
-# an application.
+# installed as a Windows service, nothing existing is replaced, and no
+# PostgreSQL setting is read or changed. PostgreSQL's licence allows
+# distributing these binaries with an application.
 $pgBin = $null
-$portablePg = Join-Path $env:LOCALAPPDATA "kayan-tools\pgsql\bin"
-if (Test-Path (Join-Path $portablePg "pg_dump.exe")) {
-  $pgBin = $portablePg
-  Write-Host "      using the portable PostgreSQL toolchain at $portablePg"
+$toolsFolder = Join-Path $env:LOCALAPPDATA "kayan-tools"
+$portablePg = Join-Path $toolsFolder "pgsql\bin"
+# Always use a clean extraction of the official EDB archive. Reusing
+# %LOCALAPPDATA%\\kayan-tools\\pgsql is unsafe: an older developer helper or
+# an unrelated PostgreSQL build can leave binaries compiled against an absolute
+# build-machine timezone path. That makes the installed database fail at startup.
+$pgVersion = "16.15"
+$archiveUrl = "https://get.enterprisedb.com/postgresql/postgresql-$pgVersion-1-windows-x64-binaries.zip"
+$archiveFile = Join-Path $env:TEMP "kayan-postgresql-$pgVersion-binaries.zip"
+$extractRoot = Join-Path $env:TEMP "kayan-postgresql-runtime-$pgVersion"
+Write-Host "      downloading the official EDB PostgreSQL $pgVersion binary archive"
+if ((Test-Path $archiveFile) -and ((Get-Item $archiveFile).Length -lt 200000000)) { Remove-Item -Force $archiveFile }
+if (-not (Test-Path $archiveFile)) {
+  & curl.exe -fsSL --connect-timeout 20 --max-time 300 --retry 3 --retry-delay 2 --retry-all-errors -o $archiveFile $archiveUrl
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $archiveFile)) { Fail ("Could not download the official EDB PostgreSQL binary archive from " + $archiveUrl) }
 }
-if (-not $pgBin) {
-  $candidates = @()
-  foreach ($root in @("${env:ProgramFiles}\PostgreSQL", "${env:ProgramFiles(x86)}\PostgreSQL")) {
-    if ($root -and (Test-Path $root)) {
-      foreach ($versionDir in (Get-ChildItem $root -Directory -ErrorAction SilentlyContinue)) {
-        $bin = Join-Path $versionDir.FullName "bin"
-        if (Test-Path (Join-Path $bin "pg_dump.exe")) { $candidates += $bin }
-      }
-    }
+if ((Get-Item $archiveFile).Length -lt 200000000) { Fail "The PostgreSQL binary archive is incomplete or unexpectedly small." }
+$archiveHeader = [System.IO.File]::ReadAllBytes($archiveFile)[0..3]
+if ($archiveHeader[0] -ne 0x50 -or $archiveHeader[1] -ne 0x4B) { Fail "The PostgreSQL archive is not a ZIP file; refusing to package it." }
+if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+New-Item -ItemType Directory -Force -Path $extractRoot | Out-Null
+Write-Host "      extracting PostgreSQL server runtime (bin, share, lib) with tar.exe"
+& tar.exe -xf $archiveFile -C $extractRoot pgsql/bin pgsql/share pgsql/lib
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $extractRoot "pgsql\bin\initdb.exe"))) {
+  & tar.exe -xf $archiveFile -C $extractRoot
+  if ($LASTEXITCODE -ne 0) { Fail "The official EDB PostgreSQL archive could not be unpacked." }
+}
+$pgBin = Join-Path $extractRoot "pgsql\bin"
+if (-not (Test-Path (Join-Path $pgBin "initdb.exe"))) {
+  $initDbCandidate = Get-ChildItem -Path $extractRoot -Filter "initdb.exe" -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $initDbCandidate) {
+    Fail "The official EDB archive extracted but contains no initdb.exe."
   }
-  # Newest version first: a newer pg_dump reads older servers, the reverse
-  # is not true.
-  $candidates = $candidates | Sort-Object -Descending
-  if ($candidates.Count -gt 0) { $pgBin = $candidates[0] }
+  $pgBin = $initDbCandidate.Directory.FullName
 }
-if (-not $pgBin) {
-  Fail ("No pg_dump/pg_restore found to bundle. Run scripts\install-postgres-portable.bat " +
-        "once (it downloads the portable PostgreSQL this project uses), or install " +
-        "PostgreSQL on this machine, then run this script again.")
-}
-$pgFolder = Join-Path $backendFolder "pg"
-New-Item -ItemType Directory -Force -Path $pgFolder | Out-Null
-foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {
-  Copy-Item (Join-Path $pgBin $tool) $pgFolder -Force
-}
-# The two programs load libpq and its neighbours from their own folder.
-Get-ChildItem $pgBin -Filter "*.dll" | Copy-Item -Destination $pgFolder -Force
+$pgRoot = Split-Path -Parent $pgBin
+if ((Get-PeMachine (Join-Path $pgBin "initdb.exe")) -ne 0x8664) { Fail "The extracted PostgreSQL initdb.exe is not a Windows x64 executable." }
+Write-Host ("      official EDB PostgreSQL binaries extracted from " + $pgBin)
 
-# The copy is only real if it runs from where it now sits.
-foreach ($tool in @("pg_dump.exe", "pg_restore.exe")) {
-  $probe = Join-Path $pgFolder $tool
+# Keep PostgreSQL's required bin/, share/, and lib/ sibling layout inside
+# backend\pg so PostgreSQL's make_relative_path() resolves share/timezone and
+# lib/plpgsql.dll relative to bin\postgres.exe on any machine.
+$pgFolder = Join-Path $backendFolder "pg"
+$pgBinFolder = Join-Path $pgFolder "bin"
+$pgShareFolder = Join-Path $pgFolder "share"
+$pgLibFolder = Join-Path $pgFolder "lib"
+New-Item -ItemType Directory -Force -Path $pgBinFolder | Out-Null
+New-Item -ItemType Directory -Force -Path $pgLibFolder | Out-Null
+
+foreach ($tool in @("pg_dump.exe", "pg_restore.exe", "psql.exe", "initdb.exe", "pg_ctl.exe", "postgres.exe", "pg_isready.exe")) {
+  $src = Join-Path $pgBin $tool
+  if (Test-Path $src) {
+    Copy-Item $src $pgBinFolder -Force
+  }
+}
+Get-ChildItem $pgBin -Filter "*.dll" -File | Where-Object { (Get-PeMachine $_.FullName) -eq 0x8664 } | Copy-Item -Destination $pgBinFolder -Force
+
+$shareSource = Join-Path $pgRoot "share"
+if (-not (Test-Path (Join-Path $shareSource "postgres.bki"))) {
+  Fail "The PostgreSQL archive did not provide the required share/postgres.bki data."
+}
+Copy-Item $shareSource $pgShareFolder -Recurse -Force
+
+$libSource = Join-Path $pgRoot "lib"
+if (-not (Test-Path (Join-Path $libSource "plpgsql.dll"))) {
+  Fail "The PostgreSQL archive is missing the required lib/plpgsql.dll runtime."
+}
+Get-ChildItem $libSource -Filter "*.dll" -File | Where-Object { (Get-PeMachine $_.FullName) -eq 0x8664 } | Copy-Item -Destination $pgLibFolder -Force
+if (-not (Test-Path (Join-Path $pgLibFolder "plpgsql.dll"))) {
+  Fail "plpgsql.dll was not copied into the packaged PostgreSQL lib folder."
+}
+Write-Host "      PostgreSQL bin/, share/, and lib/ runtime bundled under $pgFolder"
+
+Copy-Item (Join-Path $root "scripts\manage-kayan-db.ps1") (Join-Path $backendFolder "scripts\manage-kayan-db.ps1") -Force
+Copy-Item (Join-Path $root "scripts\install-kayan-database.ps1") (Join-Path $backendFolder "scripts\install-kayan-database.ps1") -Force
+
+# Verify every required tool runs from the final packaged folder, and prove
+# initdb.exe + postgres.exe can initialize a cluster from the packaged
+# bin/share/lib layout before building the installer.
+foreach ($tool in @("initdb.exe", "pg_ctl.exe", "postgres.exe", "psql.exe", "pg_dump.exe", "pg_restore.exe")) {
+  $probe = Join-Path $pgBinFolder $tool
+  if (-not (Test-Path $probe)) { Fail "Required PostgreSQL tool is missing from package: $probe" }
   $line = & $probe --version 2>&1
   if ($LASTEXITCODE -ne 0 -or -not ("$line" -match [regex]::Escape($tool.Replace(".exe", "")))) {
-    Fail "The bundled $tool did not answer --version from $pgFolder. The package is not shippable."
+    Fail "The bundled $tool did not answer --version from $pgBinFolder. The package is not shippable."
   }
   Write-Host "      bundled $($line | Select-Object -First 1)"
+}
+
+$probeData = Join-Path $env:TEMP ("kayan-pg-initdb-probe-" + [guid]::NewGuid().ToString("N"))
+$probeShare = Join-Path $pgFolder "share"
+try {
+  & (Join-Path $pgBinFolder "initdb.exe") -D $probeData -U postgres -A trust -E UTF8 --locale=C -L $probeShare
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $probeData "PG_VERSION"))) {
+    Fail "The bundled PostgreSQL initdb could not initialize with the packaged bin/share/lib layout. Do not ship this package."
+  }
+  Write-Host "      verified packaged initdb.exe + postgres.exe cluster bootstrap from $pgBinFolder"
+} finally {
+  if (Test-Path $probeData) { Remove-Item $probeData -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 # ------------------------------------------------------------- 6. client
@@ -292,6 +357,20 @@ if (-not (Test-Path (Join-Path $release "erp_kayan.exe"))) {
 }
 Copy-Item (Join-Path $release "*") $appFolder -Recurse -Force
 
+Write-Host "      building Flutter Web client for browser and LAN access..."
+flutter build web --release --dart-define=APP_ENV=production --dart-define=API_BASE_URL=/api/v1
+if ($LASTEXITCODE -eq 0) {
+  $webSource = Join-Path $root "build\web"
+  $webDest = Join-Path $backendFolder "web"
+  if (Test-Path $webSource) {
+    New-Item -ItemType Directory -Force -Path $webDest | Out-Null
+    Copy-Item (Join-Path $webSource "*") $webDest -Recurse -Force
+    Write-Host "      bundled Flutter Web client into backend\web"
+  }
+} else {
+  Write-Host "      warning: flutter build web failed; desktop client still operational"
+}
+
 # Reject any x86, ARM64, malformed, or non-PE Windows native binary before
 # creating distributable artifacts.
 $nativeFiles = Get-ChildItem -Path $appFolder -Recurse -File |
@@ -313,65 +392,35 @@ Write-Host "      verified $windowsNativeCount Windows native binaries: all x64 
 # ------------------------------------------------------------- 6. notes
 Step "7/8" "Writing the note that travels with the program"
 $note = @"
-KAYAN ERP - Windows desktop copy
-================================
+KAYAN ERP - Windows installer
+=============================
 
-To run the program, double-click:   erp_kayan.exe
+Install KAYAN-Setup.exe. The installer provisions the dedicated local
+PostgreSQL service and configures the application automatically.
 
-The program starts its own server on this machine. No terminal, no Node.js,
-no commands.
+Runtime database settings:
+    %ProgramData%\KAYAN-ERP\kayan.env
+This file is protected by Windows ACL for the installing user, SYSTEM and
+local Administrators. Do not share it.
 
-What this copy needs on the machine
------------------------------------
-1. PostgreSQL, installed and running, holding the company's data.
-   The program connects to the address written in:
-       %APPDATA%\KAYAN-ERP\kayan.env
-   That file is created automatically the first time the program runs, with
-   fresh random signing keys. Edit it only if the database is somewhere else
-   or uses different credentials. Keep DATABASE_URL and ADMIN_DATABASE_URL on
-   the same PostgreSQL host and port (the Windows setup scripts use 127.0.0.1:5432).
-   The administrator URL is used to create/update the erp_app password before
-   migrations. If PostgreSQL reports Prisma P1000, correct both URLs and
-   restart the program. The settings file contains database credentials; keep
-   the Windows user account and that file protected.
+Application logs and JSON company backups:
+    %APPDATA%\KAYAN-ERP\
 
-2. That is all. Node.js, Flutter and Git are NOT needed on this machine.
+The installer uses port 5433 for the local KAYAN_PostgreSQL service and port
+3000 for the application API. The Windows Firewall rule is limited to private
+and domain networks.
 
-If the program reports that the server did not start
-----------------------------------------------------
-Read the log, which is written to:
+No separate Node.js, Flutter, Git, npm or PostgreSQL installation is needed.
+Uninstalling KAYAN ERP preserves the PostgreSQL service, its runtime, company database, and protected settings under %ProgramData%\KAYAN-ERP.
+
+If the server does not start, read:
     %APPDATA%\KAYAN-ERP\logs\backend.log
-The most common cause is PostgreSQL not running. Start it, then reopen the
-program.
-
-What is inside this folder
---------------------------
-erp_kayan.exe          the program itself
-data\                  its screens and translations
-backend\dist\          the API server
-backend\node_modules\  the server's libraries
-backend\prisma\        the database schema and its migrations
-backend\scripts\       the step that prepares the database
-backend\node\node.exe  the Node runtime the server runs on
-backend\pg\            pg_dump and pg_restore for full database backups
-icons\                  the KAYAN logo: app_icon.ico (the icon of the program
-                        and of its shortcuts) and Kayan.png (the source)
-
-Nothing in this folder is a secret. The settings and the signing keys live in
-%APPDATA%\KAYAN-ERP\ on the machine that runs it.
 "@
 Set-Content -Path (Join-Path $appFolder "README.txt") -Value $note -Encoding UTF8
 
-# ---------------------------------------------------------------- zip
-if (-not $SkipZip) {
-  $zipPath = Join-Path $stage "KAYAN-ERP-windows.zip"
-  if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-  Write-Host ""
-  Write-Host "      packing the .zip (this takes a minute)"
-  Compress-Archive -Path (Join-Path $appFolder "*") -DestinationPath $zipPath
-}
+# The assembled folder is an intermediate input only. Never create a ZIP.
 
-# ------------------------------------------------------- 7. installer (optional)
+# ------------------------------------------------------- 7. installer (required)
 Step "8/8" "Making the installer a customer can run"
 $installer = $null
 $iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
@@ -390,13 +439,11 @@ if ($iscc) {
   & $iscc.Source "/DSourceDir=$appFolder" "/DOutputDir=$stage" `
                  (Join-Path $root "scripts\installer-windows.iss")
   if ($LASTEXITCODE -ne 0) { Fail "Inno Setup ran but did not produce the installer." }
-  $installer = Join-Path $stage "KAYAN-ERP-Setup-1.0.0.exe"
-  Write-Host "      installer written"
+  $installer = Join-Path $stage "KAYAN-Setup.exe"
+  if (-not (Test-Path $installer)) { Fail "Inno Setup completed but KAYAN-Setup.exe was not created." }
+  Write-Host "      installer written: $installer"
 } else {
-  Write-Host "      Inno Setup is not on this machine, so no .exe installer was made."
-  Write-Host "      The folder and the .zip above are complete and can be copied as they are."
-  Write-Host "      For a one-file installer: install Inno Setup 6 from https://jrsoftware.org/isdl.php"
-  Write-Host "      and run this script again."
+  Fail "Inno Setup 6 is required to create the only supported deliverable, KAYAN-Setup.exe."
 }
 
 $size = (Get-ChildItem $appFolder -Recurse -Force | Measure-Object -Property Length -Sum).Sum
@@ -407,9 +454,6 @@ Write-Host "============================================================"
 Write-Host ""
 Write-Host "  Program folder : $appFolder"
 Write-Host "  Total size     : $([math]::Round($size / 1MB, 1)) MB"
-if (-not $SkipZip) {
-  Write-Host "  Zip            : $(Join-Path $stage 'KAYAN-ERP-windows.zip')"
-}
 if ($installer) {
   Write-Host "  Installer      : $installer   <- the file a customer runs" -ForegroundColor Green
 }
@@ -417,7 +461,6 @@ Write-Host ""
 Write-Host "  Try it now:"
 Write-Host "      $appFolder\erp_kayan.exe"
 Write-Host ""
-Write-Host "  To put it on another machine: copy the zip, unpack it anywhere, and"
-Write-Host "  double-click erp_kayan.exe. That machine needs PostgreSQL, and nothing"
-Write-Host "  else."
 Write-Host ""
+
+Write-Host "  Deliver only KAYAN-Setup.exe. Do not distribute the intermediate folder."

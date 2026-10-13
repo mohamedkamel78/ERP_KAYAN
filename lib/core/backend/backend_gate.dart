@@ -6,11 +6,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme/app_theme.dart';
+import '../../features/auth/presentation/providers/auth_providers.dart';
 import '../../shared/widgets/company_setup_form.dart';
 import '../config/app_config.dart';
-import '../../features/data/presentation/providers/data_providers.dart';
 import 'company_setup_data.dart';
 import 'local_backend.dart';
+
+/// Testing hook to simulate desktop backend ownership in widget tests.
+@visibleForTesting
+bool? debugOwnsItsBackendOverride;
+
+/// Testing hook to provide a custom [LocalBackend.ensureRunning] implementation
+/// in widget tests without spawning an external Node process.
+@visibleForTesting
+Future<LocalBackendStatus> Function({required String appDisplayName})?
+debugEnsureRunningOverride;
+
+/// Testing hook to provide a custom [LocalBackend.createFirstAdministrator]
+/// implementation in widget tests.
+@visibleForTesting
+Future<LocalBackendStatus> Function({
+  required String username,
+  required String password,
+  required String appDisplayName,
+  CompanySetupData? company,
+})?
+debugCreateFirstAdministratorOverride;
 
 /// Whether this copy of the program owns its API server.
 ///
@@ -19,7 +40,10 @@ import 'local_backend.dart';
 /// starting a second one would fight it for the database; a web build has no
 /// processes to start at all.
 bool get ownsItsBackend =>
-    !kIsWeb && kReleaseMode && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
+    debugOwnsItsBackendOverride ??
+    (!kIsWeb &&
+        kReleaseMode &&
+        (Platform.isWindows || Platform.isLinux || Platform.isMacOS));
 
 /// Starts the API server a desktop installation needs, then hands over to the
 /// program.
@@ -72,7 +96,8 @@ class _BackendGateState extends State<BackendGate> {
 
   Future<void> _start() async {
     setState(() => _working = true);
-    final status = await LocalBackend.ensureRunning(appDisplayName: 'KAYAN ERP');
+    final runner = debugEnsureRunningOverride ?? LocalBackend.ensureRunning;
+    final status = await runner(appDisplayName: 'KAYAN ERP');
     if (!mounted) return;
     setState(() {
       _status = status;
@@ -80,35 +105,57 @@ class _BackendGateState extends State<BackendGate> {
     });
   }
 
+  Widget _wrapScope(
+    BuildContext context, {
+    String? baseUrlOverride,
+  }) {
+    final hasParentScope =
+        context.findAncestorWidgetOfExactType<ProviderScope>() != null;
+    if (hasParentScope && baseUrlOverride == null) {
+      return widget.child;
+    }
+    return ProviderScope(
+      overrides: [
+        if (baseUrlOverride != null)
+          appConfigProvider.overrideWithValue(
+            AppConfig.forLocalServer(baseUrlOverride),
+          ),
+      ],
+      child: widget.child,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final status = _status;
+    if (!ownsItsBackend) {
+      return _wrapScope(context);
+    }
 
-    // Not a desktop installation: straight through, exactly as before.
-    if (status == null || (!status.isReady && status.problem == null)) {
-      return _working ? const _Waiting() : widget.child;
+    final status = _status;
+    if (_working || status == null) {
+      return const _Waiting();
     }
 
     if (status.needsFirstAdministrator) {
       // The database is ready and has nobody in it yet: this is a fresh
       // installation. Whoever is setting the company up chooses the first
       // administrator here, and then the program continues normally.
-      return _FirstAdministrator(onCreated: _start, onStatus: (next) {
-        setState(() => _status = next);
-      });
+      return _FirstAdministrator(
+        onCreated: _start,
+        onStatus: (next) {
+          setState(() => _status = next);
+        },
+      );
     }
 
     if (status.isReady) {
       // The program runs against the server this machine just started. The
       // address is injected here so no screen needs to know where it came from.
-      return ProviderScope(
-        overrides: [
-          appConfigProvider.overrideWithValue(
-            AppConfig.forLocalServer(status.baseUrl!),
-          ),
-        ],
-        child: widget.child,
-      );
+      return _wrapScope(context, baseUrlOverride: status.baseUrl!);
+    }
+
+    if (status.problem == null) {
+      return _wrapScope(context);
     }
 
     return _CouldNotStart(
@@ -180,7 +227,10 @@ class _FirstAdministratorState extends State<_FirstAdministrator> {
       _busy = true;
       _error = null;
     });
-    final status = await LocalBackend.createFirstAdministrator(
+    final creator =
+        debugCreateFirstAdministratorOverride ??
+        LocalBackend.createFirstAdministrator;
+    final status = await creator(
       username: data.adminUsername,
       password: data.adminPassword,
       appDisplayName: 'KAYAN ERP',
@@ -189,7 +239,7 @@ class _FirstAdministratorState extends State<_FirstAdministrator> {
     if (!mounted) return;
     if (status.isReady) {
       setState(() => _busy = false);
-      await widget.onCreated();
+      widget.onStatus(status);
       return;
     }
     setState(() {

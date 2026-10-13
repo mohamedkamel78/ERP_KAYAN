@@ -355,7 +355,16 @@ export class ReportsService {
       },
       include: {
         entry: {
-          select: { entryNumber: true, entryDate: true, description: true, status: true },
+          select: {
+            entryNumber: true,
+            entryDate: true,
+            description: true,
+            status: true,
+            sourceType: true,
+            sourceId: true,
+            sourceNumber: true,
+            reversalOfId: true,
+          },
         },
       },
       orderBy: [{ entry: { entryDate: 'asc' } }, { entry: { entryNumber: 'asc' } }],
@@ -372,6 +381,15 @@ export class ReportsService {
         debit: l.debit.toFixed(MONEY_SCALE),
         credit: l.credit.toFixed(MONEY_SCALE),
         runningBalance: running.toFixed(MONEY_SCALE),
+        /// Which document this line came from, so the reader can open it.
+        source: l.entry.sourceType
+          ? {
+              type: l.entry.sourceType,
+              id: l.entry.sourceId,
+              number: l.entry.sourceNumber,
+            }
+          : null,
+        isReversal: Boolean(l.entry.reversalOfId),
       };
     });
 

@@ -9,20 +9,41 @@ import 'company_setup_data.dart';
 
 /// The outcome of asking a build to start its own server.
 class LocalBackendStatus {
-  const LocalBackendStatus.unsupported();
+  const LocalBackendStatus.unsupported()
+    : baseUrl = null,
+      problem = null,
+      logPath = null,
+      databaseProblem = false,
+      needsFirstAdministrator = false;
+  const LocalBackendStatus.ready(this.baseUrl)
+    : problem = null,
+      logPath = null,
+      databaseProblem = false,
+      needsFirstAdministrator = false;
+  const LocalBackendStatus.failed(
+    this.problem, {
+    this.logPath,
+    this.databaseProblem = false,
+  }) : baseUrl = null,
+       needsFirstAdministrator = false;
+  const LocalBackendStatus.needsFirstAdministrator()
+    : baseUrl = null,
+      problem = null,
+      logPath = null,
+      databaseProblem = false,
+      needsFirstAdministrator = true;
 
-  final String? baseUrl = null;
-  final String? problem = null;
-  final String? logPath = null;
-  final bool databaseProblem = false;
+  final String? baseUrl;
+  final String? problem;
+  final String? logPath;
+  final bool databaseProblem;
 
   /// A browser build never starts a server, so it never meets an empty database
   /// either - the pages it loads come from a server that is already set up.
-  final bool needsFirstAdministrator = false;
+  final bool needsFirstAdministrator;
 
-  /// A browser build is never the one that starts a server, so it is never
-  /// "ready" either - the program treats this as "carry on as you were".
-  bool get isReady => false;
+  /// Ready when a local server baseUrl is available.
+  bool get isReady => baseUrl != null;
 }
 
 /// Present so the two builds share one shape. On the web there is nothing to
@@ -30,7 +51,7 @@ class LocalBackendStatus {
 class LocalBackend {
   static LocalBackend? get instance => null;
 
-  static String get baseUrl => '';
+  String get baseUrl => '';
 
   static Future<LocalBackendStatus> ensureRunning({
     required String appDisplayName,
