@@ -7,10 +7,33 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import { createHash, randomBytes } from 'node:crypto';
 import { AuditService } from '../../common/audit/audit.service';
+import {
+  accessSecret,
+  accessTtlSeconds,
+  refreshTtlSeconds,
+} from '../../common/config/jwt-secrets';
+import {
+  DOWNLOAD_TICKET_TYPE,
+  downloadTicketTtl,
+} from '../../common/download-ticket';
 import { PrismaService } from '../../common/prisma/prisma.service';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
+
+function collectPermissions(user: {
+  userRoles: Array<{ role: { rolePermissions: Array<{ permission: { code: string } }> } }>;
+  userPermissions?: Array<{ permission: { code: string } }>;
+}): string[] {
+  return [
+    ...new Set([
+      ...user.userRoles.flatMap((ur) =>
+        ur.role.rolePermissions.map((rp) => rp.permission.code),
+      ),
+      ...(user.userPermissions ?? []).map((up) => up.permission.code),
+    ]),
+  ];
+}
 
 export interface SessionUser {
   id: string;
@@ -21,6 +44,11 @@ export interface SessionUser {
   roles: string[];
   permissions: string[];
   isActive: boolean;
+  /// Whether this account bypasses the permission check outright. The client
+  /// is told because it has to decide what to offer: a screen that hides an
+  /// action the server would have allowed is as wrong as one that offers
+  /// something the server will refuse.
+  isSuperAdmin: boolean;
 }
 
 @Injectable()
@@ -47,6 +75,7 @@ export class AuthService {
             role: { include: { rolePermissions: { include: { permission: true } } } },
           },
         },
+        userPermissions: { include: { permission: true } },
       },
     });
 
@@ -96,13 +125,7 @@ export class AuthService {
       throw invalid;
     }
 
-    const permissions = [
-      ...new Set(
-        user.userRoles.flatMap((ur) =>
-          ur.role.rolePermissions.map((rp) => rp.permission.code),
-        ),
-      ),
-    ];
+    const permissions = collectPermissions(user);
     const roles = [...new Set(user.userRoles.map((ur) => ur.role.code))];
 
     const branches = await this.prisma.userBranch.findMany({
@@ -121,8 +144,8 @@ export class AuthService {
         permissions,
       },
       {
-        secret: process.env.JWT_ACCESS_SECRET,
-        expiresIn: Number(process.env.JWT_ACCESS_TTL ?? 900),
+        secret: accessSecret(),
+        expiresIn: accessTtlSeconds(),
       },
     );
 
@@ -150,6 +173,37 @@ export class AuthService {
     };
   }
 
+  /**
+   * A one-minute credential for one address: a print page or a file.
+   *
+   * The sign-in token is what pays for it, and it is the sign-in token that
+   * keeps working everywhere afterwards. What comes back here is deliberately
+   * weaker — see DOWNLOAD_TICKET_TYPE for what it can and cannot do.
+   */
+  async issueDownloadTicket(user: {
+    id: string;
+    username: string;
+    companyId: string;
+    branchId: string | null;
+    isSuperAdmin: boolean;
+    permissions: string[];
+  }): Promise<{ ticket: string; expiresIn: number }> {
+    const expiresIn = downloadTicketTtl();
+    const ticket = await this.jwt.signAsync(
+      {
+        typ: DOWNLOAD_TICKET_TYPE,
+        sub: user.id,
+        username: user.username,
+        companyId: user.companyId,
+        branchId: user.branchId,
+        isSuperAdmin: user.isSuperAdmin,
+        permissions: user.permissions,
+      },
+      { secret: accessSecret(), expiresIn },
+    );
+    return { ticket, expiresIn };
+  }
+
   async refresh(token: string) {
     const hash = this.hashToken(token);
     const stored = await this.prisma.refreshToken.findUnique({
@@ -165,6 +219,7 @@ export class AuthService {
               },
             },
             branches: true,
+            userPermissions: { include: { permission: true } },
           },
         },
       },
@@ -182,13 +237,7 @@ export class AuthService {
     });
 
     const user = stored.user;
-    const permissions = [
-      ...new Set(
-        user.userRoles.flatMap((ur) =>
-          ur.role.rolePermissions.map((rp) => rp.permission.code),
-        ),
-      ),
-    ];
+    const permissions = collectPermissions(user);
     const roles = [...new Set(user.userRoles.map((ur) => ur.role.code))];
     const branchId = user.branches[0]?.branchId ?? null;
 
@@ -202,8 +251,8 @@ export class AuthService {
         permissions,
       },
       {
-        secret: process.env.JWT_ACCESS_SECRET,
-        expiresIn: Number(process.env.JWT_ACCESS_TTL ?? 900),
+        secret: accessSecret(),
+        expiresIn: accessTtlSeconds(),
       },
     );
 
@@ -236,7 +285,7 @@ export class AuthService {
 
   private async issueRefreshToken(userId: string): Promise<string> {
     const token = randomBytes(48).toString('base64url');
-    const ttl = Number(process.env.JWT_REFRESH_TTL ?? 604800);
+    const ttl = refreshTtlSeconds();
     await this.prisma.refreshToken.create({
       data: {
         userId,
@@ -259,6 +308,7 @@ export class AuthService {
       fullNameAr: string;
       companyId: string;
       isActive: boolean;
+      isSuperAdmin: boolean;
     },
     roles: string[],
     permissions: string[],
@@ -272,6 +322,7 @@ export class AuthService {
       branchId,
       roles,
       permissions,
+      isSuperAdmin: user.isSuperAdmin,
       isActive: user.isActive,
     };
   }

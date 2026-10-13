@@ -58,3 +58,6 @@ backend/backups/
 
 # Maven (accidentally created, not part of this project)
 .mvn/
+
+# Built artefacts (the demo backup file is attached to the CI run, never committed)
+backend/dist-demo/

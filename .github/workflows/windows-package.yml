@@ -1,19 +1,14 @@
 # Builds the real Windows copy of KAYAN ERP, on a real Windows machine.
 #
 # Why this exists: `flutter build windows` needs Windows and Visual Studio, so
-# the program cannot be built on a Linux or macOS workstation. This workflow is
+# the program cannot be built on a Linux or macOS workstation. PRs and pushes to main use this workflow to
 # the build machine. It runs the very same script a developer would run
 # (scripts\build-desktop-windows.ps1), then asks whether the result is really
 # shippable (scripts\verify-package.ps1), and keeps the output.
 #
-# What it produces:
-#   * on every relevant push to main  -> the outputs are kept as build artifacts
-#     (Actions tab of the run)
-#   * on a version tag such as v1.0.0 -> the same files are published as a
-#     GitHub release, which anyone can download without signing in:
-#         KAYAN-ERP-windows.zip          the program folder, ready to copy
-#         KAYAN-ERP-Setup-<version>.exe  the installer a customer double-clicks
-#
+# The only Windows application deliverable is KAYAN-Setup.exe. The assembled
+# folder is an intermediate input to Inno Setup and is never published as ZIP.
+
 # No database is involved: building the program does not need one. Running it
 # does, and that is documented in docs\DESKTOP_WINDOWS.md.
 
@@ -21,7 +16,9 @@ name: Windows package
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "arena/**"
     paths:
       - "backend/**"
       - "lib/**"
@@ -31,6 +28,17 @@ on:
       - "pubspec.lock"
       - ".github/workflows/windows-package.yml"
     tags: ["v*"]
+  pull_request:
+    # Before a change is merged, prove on a real Windows machine that the
+    # package still builds and the single installer exists.
+    paths:
+      - "backend/**"
+      - "lib/**"
+      - "windows/**"
+      - "scripts/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/windows-package.yml"
   workflow_dispatch:
 
 permissions:
@@ -72,7 +80,20 @@ jobs:
           npm --version
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (Test-Path $iscc) { Write-Host "Inno Setup: $iscc" }
-          else { Write-Host "Inno Setup: not found - the installer step will be skipped" }
+          else { Write-Host "Inno Setup: not found yet - the next step installs it" }
+
+      - name: Install Inno Setup (the installer a customer runs)
+        shell: pwsh
+        run: |
+          # The single setup installer must come out of every build, so the compiler
+          # that makes the installer is installed here rather than left to
+          # chance. Inno Setup is free and leaves no runtime dependency in
+          # the customer's installation.
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco could not install Inno Setup" }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup installed but ISCC.exe is not at $iscc" }
+          Write-Host "Inno Setup ready: $iscc"
 
       - name: Check that the two backend implementations still agree
         shell: pwsh
@@ -86,7 +107,7 @@ jobs:
           Get-Content build\shape-log.txt
           if ($code -ne 0) { throw "the two backend implementations do not agree (exit code $code)" }
 
-      - name: Build the program folder, the zip and the installer
+      - name: Build the program folder and the single installer
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
@@ -95,13 +116,54 @@ jobs:
           # inside PowerShell instead turns the first line a tool writes to
           # stderr into an error record, and the real message is lost.
           flutter doctor -v > build\doctor.txt 2>&1
-          cmd /c 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1 > build\build-log.txt 2>&1'
+          cmd /c 'powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-desktop-windows.ps1 -SkipZip > build\build-log.txt 2>&1'
           $code = $LASTEXITCODE
           Write-Host "--- the end of the build log ---"
           Get-Content build\build-log.txt -Tail 60
           Write-Host "--- the build script exited with $code ---"
-          if ($code -ne 0) { throw "the build script failed with exit code $code" }
+          if ($code -ne 0) {
+            Get-Content build\build-log.txt -Tail 10 | ForEach-Object {
+              Write-Output ("::error::" + ($_ -replace '%','%25' -replace "`r",'%0D' -replace "`n",'%0A'))
+            }
+            throw "the build script failed with exit code $code"
+          }
 
+      - name: Install and smoke-test the actual setup and local server
+        shell: pwsh
+        run: |
+          try {
+            & ./scripts/smoke-test-installed-windows.ps1 -SetupPath "build\desktop\KAYAN-Setup.exe" *> build\smoke-log.txt
+          } catch {
+            Add-Content -Path build\smoke-log.txt -Value ($_ | Out-String)
+            throw
+          } finally {
+            if (Test-Path build\smoke-log.txt) {
+              Get-Content build\smoke-log.txt
+            }
+          }
+      - name: Sign installer when a trusted certificate is configured
+        shell: pwsh
+        env:
+          KAYAN_SIGNING_CERT_PFX_BASE64: ${{ secrets.KAYAN_SIGNING_CERT_PFX_BASE64 }}
+          KAYAN_SIGNING_CERT_PASSWORD: ${{ secrets.KAYAN_SIGNING_CERT_PASSWORD }}
+        run: |
+          $setup = "build\desktop\KAYAN-Setup.exe"
+          if (-not $env:KAYAN_SIGNING_CERT_PFX_BASE64 -or -not $env:KAYAN_SIGNING_CERT_PASSWORD) {
+            Write-Warning "Installer is unsigned. Windows SmartScreen may still warn; a trusted code-signing certificate is required to establish publisher reputation."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "kayan-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:KAYAN_SIGNING_CERT_PFX_BASE64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "Windows SDK signtool.exe was not found." }
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:KAYAN_SIGNING_CERT_PASSWORD /tr "http://timestamp.digicert.com" /td SHA256 $setup
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed." }
+          & $signtool.FullName verify /pa /v $setup
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode signature verification failed." }
+          Remove-Item $pfx -Force
+          Write-Host "Installer signature verified."
+ 
       - name: Check that the result is really shippable
         shell: pwsh
         run: |
@@ -132,8 +194,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          $logs = @("build\shape-log.txt", "build\build-log.txt", "build\verify-log.txt", "build\doctor.txt")
-          $tails = @{ "build\shape-log.txt" = 60; "build\build-log.txt" = 300; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
+          $logs = @("build\shape-log.txt", "build\build-log.txt", "build\smoke-log.txt", "build\verify-log.txt", "build\doctor.txt")
+          $tails = @{ "build\shape-log.txt" = 60; "build\build-log.txt" = 300; "build\smoke-log.txt" = 200; "build\verify-log.txt" = 200; "build\doctor.txt" = 60 }
           $parts = @()
           foreach ($log in $logs) {
             if (Test-Path $log) {
@@ -149,31 +211,43 @@ jobs:
           Set-Content -Path build\comment.md -Value $body -Encoding utf8
           gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" -F body=@build\comment.md
 
+      - name: Check that the only deliverable exists
+        shell: pwsh
+        run: |
+          $setup = @(Get-ChildItem build\desktop -Filter "KAYAN-Setup.exe" -File -ErrorAction SilentlyContinue)
+          if ($setup.Count -ne 1) { throw "Exactly one deliverable, KAYAN-Setup.exe, must be produced" }
+          if (Test-Path "build\desktop\KAYAN-ERP-windows.zip") { throw "A ZIP was produced, but only KAYAN-Setup.exe is allowed" }
+          Write-Host ("Only deliverable: " + $setup[0].Name + "  " + [math]::Round($setup[0].Length / 1MB, 1) + " MB")
+
       - name: Show what was produced
         shell: pwsh
         run: |
           Get-ChildItem build\desktop | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}} | Format-Table -AutoSize
           Get-ChildItem build\desktop\KAYAN-ERP | Select-Object Name | Format-Table -AutoSize
 
-      - name: Keep the outputs on this run
+      - name: Keep the single installer on this run
         uses: actions/upload-artifact@v4
         with:
-          name: KAYAN-ERP-windows
-          path: |
-            build/desktop/*.zip
-            build/desktop/*Setup*.exe
+          name: KAYAN-Setup
+          path: build/desktop/KAYAN-Setup.exe
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish them as a downloadable release (version tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Publishing is deliberately restricted to an explicit version tag. A
+      # push to a development branch produces an artifact for review; it must
+      # never replace the installer a customer already downloaded from the
+      # released version, because nothing has approved that new build yet.
+      - name: Publish the verified KAYAN-Setup.exe to GitHub Release for direct download
+        if: success() && startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          $files = @(Get-ChildItem build\desktop -File | Where-Object { $_.Extension -in '.zip','.exe' } | ForEach-Object { $_.FullName })
-          if ($files.Count -eq 0) { throw "nothing to publish" }
+          $ErrorActionPreference = "Stop"
+          $tag = if ("${{ github.ref }}".StartsWith("refs/tags/v")) { "${{ github.ref_name }}" } else { "v1.0.1" }
+          $setup = Join-Path (Get-Location) "build\desktop\KAYAN-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "KAYAN-Setup.exe was not produced" }
+          $files = @($setup)
 
           # Say what was actually checked, in the release itself, so the files
           # carry their own evidence instead of asking anyone to trust them.
@@ -183,26 +257,25 @@ jobs:
             Select-String -Pattern "Total size\s*:\s*(.+)$" | Select-Object -First 1).Matches[0].Groups[1].Value.Trim()
           $builtOn = (Get-Content build\doctor.txt |
             Select-String -Pattern "Flutter \(Channel stable, ([^,]+)" | Select-Object -First 1).Matches[0].Groups[1].Value
-          # Names come from the files themselves: a tag says v1.0.1 while the
-          # installer inside it is named for the version in its own definition.
-          $setupName = ($files | Where-Object { $_ -match "Setup" } |
-            ForEach-Object { Split-Path $_ -Leaf } | Select-Object -First 1)
-          if (-not $setupName) { $setupName = "the installer in this release" }
-          $zipName = ($files | Where-Object { $_ -match "\.zip$" } |
-            ForEach-Object { Split-Path $_ -Leaf } | Select-Object -First 1)
-          if (-not $zipName) { $zipName = "the .zip in this release" }
+          $setupName = "KAYAN-Setup.exe"
+          $setupSizeMb = [math]::Round((Get-Item $setup).Length / 1MB, 1)
+          $setupSha256 = (Get-FileHash -Path $setup -Algorithm SHA256).Hash
+          $sig = Get-AuthenticodeSignature -FilePath $setup
+          $sigStatus = "$($sig.Status)"
 
           $notes = @"
           KAYAN ERP for Windows, built from commit ${{ github.sha }}.
 
+          Direct Download
+          ---------------
+          https://github.com/${{ github.repository }}/releases/download/$tag/$setupName
+
           Install it
           ----------
-          Run $setupName, or unpack $zipName anywhere and double-click
-          erp_kayan.exe inside it.
+          Run $setupName ($setupSizeMb MB, SHA-256: $setupSha256, Authenticode: $sigStatus). This release contains the single installer only.
 
           The program starts its own server: no terminal, no Node.js, no npm, no
-          Flutter and no commands. What the machine does need is PostgreSQL,
-          holding the company's data - see docs\DESKTOP_WINDOWS.md.
+          Flutter and no commands. The installer provisions its dedicated local PostgreSQL instance (KAYAN_PostgreSQL on port 5433).
 
           On a machine where the database is still empty the program asks for the
           first administrator, and creates the company, its roles and its chart
@@ -218,18 +291,23 @@ jobs:
           $verdict.
           "@
 
-          # A tag is not the same thing as a release: deleting the release must
-          # leave the tag alone, or the create that follows has nothing to
-          # verify against. (--cleanup-tag deletes both, and the first run that
-          # replaced an existing release failed exactly there.)
-          gh release view $tag > $null 2>&1
+          $notesFile = Join-Path $env:TEMP "kayan-release-notes.txt"
+          Set-Content -Path $notesFile -Value $notes -Encoding UTF8
+
+          & gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release delete $tag --yes
-          }
-          gh release create $tag --verify-tag --title "KAYAN ERP $tag - Windows" --notes $notes @files
-          if ($LASTEXITCODE -ne 0) {
-            # Whatever stopped the create, the files are the point: try simply
-            # putting them on the release of that name.
-            gh release upload $tag @files --clobber
+            $oldAssets = (& gh release view $tag --json assets --jq ".assets[].name") 2>$null
+            foreach ($assetName in $oldAssets) {
+              if ($assetName -and $assetName -ne $setupName) {
+                Write-Host "Removing legacy release asset: $assetName"
+                & gh release delete-asset $tag $assetName --yes
+              }
+            }
+            & gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "could not upload $setupName to release $tag" }
+            & gh release edit $tag --title "KAYAN ERP $tag - Windows" --notes-file $notesFile
+          } else {
+            & gh release create $tag --title "KAYAN ERP $tag - Windows" --notes-file $notesFile @files
             if ($LASTEXITCODE -ne 0) { throw "could not publish the package" }
           }
+          Write-Host "::notice title=KAYAN-Setup.exe Published::Direct URL: https://github.com/${{ github.repository }}/releases/download/$tag/$setupName | Commit: ${{ github.sha }} | Size: $setupSizeMb MB | SHA256: $setupSha256 | Authenticode: $sigStatus"

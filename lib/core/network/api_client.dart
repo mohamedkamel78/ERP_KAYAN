@@ -1,14 +1,21 @@
 import 'package:dio/dio.dart';
 
+import '../backend/local_backend.dart';
 import '../config/app_config.dart';
 import '../error/failure.dart';
 import '../logging/app_logger.dart';
 import '../storage/token_store.dart';
 
+/// Called when the session cannot be renewed: the refresh token is gone,
+/// spent or expired, and the only honest answer is to sign the person out.
+typedef SessionExpiredHandler = Future<void> Function();
+
 /// Thin, testable wrapper around [Dio].
 ///
 /// Responsibilities:
 ///  * attach the bearer token to outgoing requests
+///  * renew a session that has run out, so a quarter of an hour is not a
+///    reason to be thrown back to the sign-in screen
 ///  * translate transport errors into typed [Failure]s
 ///  * never log credentials, tokens or financial payloads
 class ApiClient {
@@ -31,14 +38,49 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) async {
+          final localBaseUrl = LocalBackend.instance?.baseUrl;
+          if (localBaseUrl != null &&
+              localBaseUrl.isNotEmpty &&
+              options.baseUrl != localBaseUrl &&
+              (options.baseUrl == 'http://localhost:3000/api/v1' ||
+                  options.baseUrl == 'http://127.0.0.1:3000/api/v1')) {
+            _dio.options.baseUrl = localBaseUrl;
+            options.baseUrl = localBaseUrl;
+          }
           final token = await _tokenStore.readAccessToken();
           if (token != null && token.isNotEmpty) {
             options.headers['Authorization'] = 'Bearer $token';
           }
           handler.next(options);
         },
-        onError: (e, handler) {
-          _log.warning('HTTP error: ${e.type} ${e.response?.statusCode}');
+        onError: (e, handler) async {
+          // A sign-in token lives for a few minutes on purpose. Nobody
+          // should be asked to sign in again in the middle of the working
+          // day, so a refusal is given one chance to be a token that simply
+          // ran out: renew it, then send the very same request again.
+          //
+          // Financial Periods was where this showed itself — the first
+          // screen somebody opens a while after signing in, by which time
+          // the token had expired and every call behind that screen started
+          // answering "Invalid or expired token".
+          if (_isSessionRefusal(e) &&
+              e.requestOptions.extra[_skipRenewal] != true) {
+            final renewed = await _renewSession();
+            if (renewed) {
+              try {
+                final retried = await _dio.fetch<dynamic>(
+                  _authorised(e.requestOptions),
+                );
+                return handler.resolve(retried);
+              } on DioException {
+                // The renewal worked but the request itself did not; the
+                // original failure is the one worth reporting.
+              }
+            } else {
+              await _tokenStore.clear();
+              await onSessionExpired?.call();
+            }
+          }
           handler.next(e);
         },
       ),
@@ -53,7 +95,75 @@ class ApiClient {
   final AppConfig _config;
   static final _log = AppLogger.of('ApiClient');
 
+  /// Set by whoever owns the session, so a session that cannot be renewed
+  /// ends in a sign-out rather than in a screen full of errors.
+  SessionExpiredHandler? onSessionExpired;
+
+  /// A renewal already under way. Several requests fail at once when a token
+  /// runs out, and only one of them may spend the refresh token — the rest
+  /// wait for it, because spending it twice revokes the first renewal.
+  Future<bool>? _renewing;
+
+  static const _skipRenewal = 'skipSessionRenewal';
+
   Dio get raw => _dio;
+
+  /// A 401 that is about the session rather than about permission.
+  ///
+  /// 403 means "you may not": renewing the session will not change that, and
+  /// trying would only add a delay before the same answer.
+  bool _isSessionRefusal(DioException e) =>
+      e.response?.statusCode == 401 &&
+      e.requestOptions.path != _refreshPath &&
+      e.requestOptions.path != '/auth/login';
+
+  RequestOptions _authorised(RequestOptions options) {
+    // The interceptor runs again for the retry and would attach the old
+    // token, so the new one is put on here and the retry is allowed to keep
+    // it.
+    options.extra[_skipRenewal] = true;
+    return options;
+  }
+
+  /// Exchanges the refresh token for a new pair.
+  ///
+  /// The server rotates refresh tokens: the one sent here is spent, and only
+  /// the one that comes back will work next time. That is why concurrent
+  /// failures share a single renewal.
+  Future<bool> _renewSession() {
+    final inFlight = _renewing;
+    if (inFlight != null) return inFlight;
+    final renewal = _exchangeRefreshToken();
+    _renewing = renewal;
+    return renewal.whenComplete(() => _renewing = null);
+  }
+
+  Future<bool> _exchangeRefreshToken() async {
+    try {
+      final refreshToken = await _tokenStore.readRefreshToken();
+      if (refreshToken == null || refreshToken.isEmpty) return false;
+
+      final response = await _dio.post<Map<String, dynamic>>(
+        _refreshPath,
+        data: <String, dynamic>{'refreshToken': refreshToken},
+        options: Options(extra: <String, dynamic>{_skipRenewal: true}),
+      );
+      final data = response.data ?? const <String, dynamic>{};
+      final accessToken = data['accessToken'] as String?;
+      if (accessToken == null || accessToken.isEmpty) return false;
+
+      // Only the refresh token that came back will be good next time.
+      await _tokenStore.saveTokens(
+        accessToken: accessToken,
+        refreshToken: data['refreshToken'] as String?,
+      );
+      return true;
+    } on DioException {
+      return false;
+    }
+  }
+
+  static const _refreshPath = '/auth/refresh';
 
   Future<Map<String, dynamic>> get(
     String path, {
@@ -99,11 +209,19 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
   }) async {
-    final Response<dynamic> response;
+    Response<dynamic> response;
     try {
       response = await _dio.get<dynamic>(path, queryParameters: query);
     } on DioException catch (e) {
-      throw _mapDioException(e);
+      if (await _tryRecoverLocalBackend(e)) {
+        try {
+          response = await _dio.get<dynamic>(path, queryParameters: query);
+        } on DioException catch (retryError) {
+          throw _mapDioException(retryError);
+        }
+      } else {
+        throw _mapDioException(e);
+      }
     }
     final data = response.data;
     final raw = data is Map && data['items'] is List
@@ -122,11 +240,19 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? query,
   }) async {
-    final Response<dynamic> response;
+    Response<dynamic> response;
     try {
       response = await _dio.get<dynamic>(path, queryParameters: query);
     } on DioException catch (e) {
-      throw _mapDioException(e);
+      if (await _tryRecoverLocalBackend(e)) {
+        try {
+          response = await _dio.get<dynamic>(path, queryParameters: query);
+        } on DioException catch (retryError) {
+          throw _mapDioException(retryError);
+        }
+      } else {
+        throw _mapDioException(e);
+      }
     }
     final data = response.data;
     if (data is Map) return Map<String, dynamic>.from(data);
@@ -143,12 +269,40 @@ class ApiClient {
       if (data == null) return <String, dynamic>{};
       return <String, dynamic>{'data': data};
     } on DioException catch (e) {
+      if (await _tryRecoverLocalBackend(e)) {
+        try {
+          final response = await request();
+          final data = response.data;
+          if (data is Map<String, dynamic>) return data;
+          if (data == null) return <String, dynamic>{};
+          return <String, dynamic>{'data': data};
+        } on DioException catch (retryError) {
+          throw _mapDioException(retryError);
+        }
+      }
       throw _mapDioException(e);
     } on Failure {
       rethrow;
     } catch (e) {
       throw ServerFailure('Unexpected client error', e);
     }
+  }
+
+  Future<bool> _tryRecoverLocalBackend(DioException e) async {
+    if (LocalBackend.instance == null) return false;
+    final isConnectionFailure =
+        e.type == DioExceptionType.connectionError ||
+        e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.unknown;
+    if (!isConnectionFailure) return false;
+    final status = await LocalBackend.ensureRunning(
+      appDisplayName: 'KAYAN ERP',
+    );
+    if (status.isReady && status.baseUrl != null && status.baseUrl!.isNotEmpty) {
+      _dio.options.baseUrl = status.baseUrl!;
+      return true;
+    }
+    return false;
   }
 
   Failure _mapDioException(DioException e) {

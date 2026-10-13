@@ -179,6 +179,12 @@ class _AccountTileState extends ConsumerState<_AccountTile> {
           if (!account.isActive)
             Icon(Icons.block, size: 18, color: theme.colorScheme.error),
           IconButton(
+            tooltip: l10n.newAccount,
+            icon: const Icon(Icons.add, size: 20),
+            onPressed: () =>
+                _editAccount(context, ref, null, initialParent: account),
+          ),
+          IconButton(
             tooltip: l10n.editAccount,
             icon: const Icon(Icons.edit_outlined, size: 20),
             onPressed: () => _editAccount(context, ref, account),
@@ -198,8 +204,9 @@ class _AccountTileState extends ConsumerState<_AccountTile> {
 Future<void> _editAccount(
   BuildContext context,
   WidgetRef ref,
-  Account? existing,
-) async {
+  Account? existing, {
+  Account? initialParent,
+}) async {
   final all = ref.read(chartOfAccountsProvider).value ?? const <Account>[];
 
   // Parents: every account of the same type, except the account being edited
@@ -229,14 +236,16 @@ Future<void> _editAccount(
       )
       .toList(growable: false);
 
-  String? selectedParent = existing?.parentId;
-  var selectedType = existing?.type ?? AccountType.asset;
+  String? selectedParent = existing?.parentId ?? initialParent?.id;
+  var selectedType =
+      existing?.type ?? initialParent?.type ?? AccountType.asset;
   var isPostable = existing?.isPostable ?? true;
   var isActive = existing?.isActive ?? true;
 
   final codeController = TextEditingController(text: existing?.code ?? '');
   final nameArController = TextEditingController(text: existing?.nameAr ?? '');
   final nameEnController = TextEditingController(text: existing?.nameEn ?? '');
+  String? lastSuggestedCode;
 
   // The suggested code follows the chart's own numbering as soon as a parent
   // is chosen and the field is still untouched.
@@ -244,7 +253,8 @@ Future<void> _editAccount(
     final suggestion = await ref
         .read(chartOfAccountsRepositoryProvider)
         .suggestCode(parentId: selectedParent);
-    codeController.text = suggestion.valueOrNull ?? '';
+    lastSuggestedCode = suggestion.valueOrNull;
+    codeController.text = lastSuggestedCode ?? '';
     if (!context.mounted) {
       codeController.dispose();
       nameArController.dispose();
@@ -344,15 +354,18 @@ Future<void> _editAccount(
                           }
                         }
                       });
+                      final currentCode = codeController.text.trim();
                       if (existing == null &&
-                          codeController.text.trim().isEmpty) {
+                          (currentCode.isEmpty ||
+                              currentCode == lastSuggestedCode)) {
                         final suggestion = await ref
                             .read(chartOfAccountsRepositoryProvider)
                             .suggestCode(parentId: value);
                         if (suggestion.valueOrNull != null) {
-                          setDialogState(
-                            () => codeController.text = suggestion.valueOrNull!,
-                          );
+                          setDialogState(() {
+                            lastSuggestedCode = suggestion.valueOrNull;
+                            codeController.text = suggestion.valueOrNull!;
+                          });
                         }
                       }
                     },
